@@ -7,7 +7,7 @@ tasks:
   acceptance:
   - Gives accounts, pipeline stage counts and churn per country, computed from [crm_pipeline.csv] with
     the row range cited.
-  - Breaks the same figures down by customer segment and states the churn rate per segment.
+  - Reports segment-level metrics (counts, ARR, churn) with citations.
   - Shows each calculation (counts, ratios) so a reviewer can recompute it.
   - Cites a data-room file in [file] form for every figure.
   deps: []
@@ -29,8 +29,8 @@ tasks:
   acceptance:
   - Computes the unit cost per seat from [cost_structure.csv], citing the lines used.
   - Derives a price floor and a recommended price in EUR, showing the formula and comparing with [competitor_prices.md].
-  - Quotes at least two customer statements about price from [interviews/interview_NN.md] files, cited
-    in [file] form.
+  - Quotes at least two customer statements about price from interview files such as [interviews/interview_07.md],
+    cited in [file] form.
   deps: []
 - id: gtm
   title: Go-to-market and sales capacity
@@ -46,8 +46,10 @@ tasks:
   objective: Synthesise what the customer interviews say about demand, price and switching.
   output_format: Markdown, under 350 words.
   acceptance:
-  - Cites at least five distinct interviews as [interviews/interview_NN.md], each with the point it supports.
-  - Checks each interview's claims against [crm_pipeline.csv] and says where they agree or conflict.
+  - Cites at least five distinct interviews, for example [interviews/interview_07.md], each with the point
+    it supports.
+  - Tests interview claims against measurable data in the data room where possible and reports conflicts,
+    citing the files involved.
   - Separates stated opinion from measured data and says which is stronger for each conclusion.
   deps: []
 - id: regulatory
@@ -66,9 +68,9 @@ tasks:
   objective: Compute the operating and market-entry cost of each country.
   output_format: Markdown table plus notes, under 350 words.
   acceptance:
-  - Lists per-country entry costs from [cost_structure.csv] and per-country hiring cost from [hiring_costs_by_country.csv].
-  - Recomputes the hiring total from [hiring_costs_by_country.csv] and compares it with [hiring_costs_summary.csv],
-    showing both numbers.
+  - Lists per-country entry costs and per-country hiring cost, each figure cited in [file] form.
+  - Verifies the internal consistency of the figures it uses and reports every discrepancy, citing the
+    files involved.
   - Reports every figure that does not reconcile between files, citing both.
   deps: []
 - id: country_sequence

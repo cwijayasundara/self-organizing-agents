@@ -19,9 +19,17 @@ All evidence is in a read-only data room mounted at `/data/`. Read its `README.m
 
 Every factual claim must cite its source file in square brackets, with the path relative to the data-room root. Examples: `[crm_pipeline.csv]`, `[crm_pipeline.csv:rows 1-40]`, `[interviews/interview_07.md]`, `[regulatory/Poland.md]`. Do not write `/data/...` paths; they are rejected. Cite relative to the data-room root only.
 
-## Check the evidence
+## How to work with the evidence
 
-Compare files with each other as you work. Report any discrepancy, contradiction or risk you find in the evidence, with the files involved and the figures that differ.
+Work like an auditor:
+
+- Compare files against each other.
+- Recompute totals from their line items.
+- Check qualitative claims against measured data.
+- Compare competitor prices with the company's own.
+- Check regulatory timelines for every country.
+
+Report any discrepancy, contradiction or risk you find in the evidence, with the files involved and the figures that differ.
 
 ## Final output format
 
@@ -30,12 +38,12 @@ The final dossier must end with the line `DOSSIER_SUMMARY` followed by a fenced 
 DOSSIER_SUMMARY
 ```json
 {
-  "recommendation": "enter",
-  "country_order": ["X", "X", "X", "X", "X"],
-  "blocker_country": "X",
-  "anomaly_segment": "X",
-  "undercutting_competitor": "X",
-  "arith_mismatch_eur": 0
+  "recommendation": "<enter or hold>",
+  "country_order": ["<country 1>", "<country 2>", "<country 3>", "<country 4>", "<country 5>"],
+  "blocker_country": "<country>",
+  "anomaly_segment": "<segment>",
+  "undercutting_competitor": "<competitor>",
+  "arith_mismatch_eur": "<number>"
 }
 ```
 

@@ -71,6 +71,25 @@ def test_brief_has_summary_format_and_no_answers(tmp_path, variant):
         assert k in brief
     assert "relative to the data-room root" in brief
     assert "/data/" in brief
+    assert "## How to work with the evidence" in brief
+    from agora.domain import parse_dossier_summary
+    assert parse_dossier_summary(brief) is None
+
+
+def test_template_criteria_are_neutral():
+    import yaml
+    for t in yaml.safe_load((EU / "template.yaml").read_text())["tasks"]:
+        for text in [t["objective"], *t["acceptance"]]:
+            assert not ("hiring_costs_by_country" in text and "hiring_costs_summary" in text), t["id"]
+            assert not ("interview" in text and "crm_pipeline" in text), t["id"]
+
+
+def test_example_citations_resolve(tmp_path):
+    from agora.domain import extract_citations, _resolves
+    generate_dataroom(0, str(tmp_path / "room"), str(tmp_path / "gold.json"))
+    for name in ("brief.md", "template.yaml"):
+        for c in extract_citations((EU / name).read_text()):
+            assert _resolves(str(tmp_path / "room"), c), (name, c)
 
 
 def test_make_dataroom_script(tmp_path, capsys):
@@ -136,6 +155,13 @@ def test_cli_domain_flag_requires_data_dir(tmp_path, capsys):
     assert "error: --domain needs a roster with data_dir" in capsys.readouterr().err
 
 
+def test_cli_domain_missing_data_dir_path(tmp_path, capsys):
+    assert cli.main(_args(tmp_path, extra=f"data_dir: {tmp_path / 'nope'}")) == 1
+    err = capsys.readouterr().err
+    assert "does not exist (run scripts/make_dataroom.py first)" in err
+    assert not (tmp_path / "x.sqlite").exists()
+
+
 def test_cli_domain_flag_wires_validators(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(api, "build_model", lambda spec: ScriptedChatModel())
     seen = {}
@@ -153,11 +179,12 @@ def test_cli_domain_flag_wires_validators(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(cli, "build_domain", fake_build)
     monkeypatch.setattr(cli, "run_swarm", spy)
-    cli.main(_args(tmp_path, extra="data_dir: some/dir"))
-    assert seen["b"] == ("eu_market_entry", "some/dir")
+    (tmp_path / "some" / "dir").mkdir(parents=True)
+    cli.main(_args(tmp_path, extra=f"data_dir: {tmp_path / 'some' / 'dir'}"))
+    assert seen["b"] == ("eu_market_entry", str(tmp_path / "some" / "dir"))
     assert seen["kw"]["validators"] == vals and seen["kw"]["admission"] == adm
 
 
 def test_cli_domain_unknown_name_exit_1(tmp_path, capsys):
-    assert cli.main(_args(tmp_path, extra="data_dir: d", domain="nope")) == 1
+    assert cli.main(_args(tmp_path, extra="data_dir: .", domain="nope")) == 1
     assert capsys.readouterr().err.startswith("error:")

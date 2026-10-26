@@ -50,6 +50,8 @@ def _run(args: argparse.Namespace) -> int:
     roster = load_roster(args.roster)
     if args.domain and roster.data_dir is None:
         raise ConfigError("--domain needs a roster with data_dir")
+    if args.domain and not Path(roster.data_dir).is_dir():
+        raise ConfigError(f"data_dir {roster.data_dir} does not exist (run scripts/make_dataroom.py first)")
     specs = load_template(args.template)
     brief = Path(args.brief).read_text()
 
