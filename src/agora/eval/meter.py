@@ -51,9 +51,13 @@ class _Handler(BaseCallbackHandler):
 
 class SpendMeter:
     def __init__(self, cap_usd: float):
-        self.cap_usd = cap_usd
+        self._cap_usd = cap_usd
         self._lock = threading.Lock()
         self._by_model: dict[str, float] = {}
+
+    @property
+    def cap_usd(self) -> float:
+        return self._cap_usd
 
     @staticmethod
     def _handlers(model: BaseChatModel) -> list:
