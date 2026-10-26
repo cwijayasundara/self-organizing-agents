@@ -56,6 +56,8 @@ class SwarmRunner:
         self._failures = {pid: 0 for pid in self.ids}
         self._started = {pid: False for pid in self.ids}
         self._nudge = {pid: False for pid in self.ids}
+        self._nudged = {pid: False for pid in self.ids}  # a NUDGE was delivered and no note has followed
+        self._noop_streak = {pid: 0 for pid in self.ids}
         self._warnings: dict[str, list[str]] = {pid: [] for pid in self.ids}
         self._mid: set[str] = set()
         self._stopping = False
@@ -69,6 +71,8 @@ class SwarmRunner:
             status = await self._monitor(start)
             self._stopping = True
             await self._grace()
+            if evaluate_done(self.ledger).done:
+                status = "done"  # done wins: status == "done" iff result.done.done
         finally:
             for t in loops:
                 t.cancel()
@@ -106,6 +110,7 @@ class SwarmRunner:
             parts.append("NEW MESSAGES\n" + wrap_lines([f"{m.sender}: {m.text}" for m in mail]))
         if self._nudge[pid]:
             parts.append(NUDGE)
+            self._nudged[pid] = True
         parts.extend(self._warnings[pid])
         self._nudge[pid] = False
         self._warnings[pid] = []
@@ -122,6 +127,7 @@ class SwarmRunner:
             text = self._build_input(pid)
             self._started[pid] = True
             before = self.ledger.board.last_note_id(pid)
+            fp_before = self._fingerprint()
             failed = False
             self._mid.add(pid)
             try:
@@ -148,10 +154,18 @@ class SwarmRunner:
                 await self.sleep(min(5 * self._failures[pid], 60))
                 continue
             self._failures[pid] = 0
-            # Nudge only a peer that still has something to do, else it would be woken forever.
-            if self.ledger.board.last_note_id(pid) == before and self._has_work(pid):
+            wrote_note = self.ledger.board.last_note_id(pid) != before
+            if wrote_note:
+                self._nudged[pid] = False
+            # At most one NUDGE per no-note streak, and only to a peer that still has something to do.
+            elif not self._nudged[pid] and self._has_work(pid):
                 self._nudge[pid] = True
-            await self.sleep(0)  # always yield between episodes
+            if not wrote_note and self._fingerprint() == fp_before:
+                self._noop_streak[pid] += 1
+                await self.sleep(budget.idle_poll_s)  # cooldown after an episode that changed nothing
+            else:
+                self._noop_streak[pid] = 0
+                await self.sleep(0)  # always yield between episodes
 
     def _retire(self, pid: str) -> None:
         self.retired.append(pid)
@@ -197,7 +211,7 @@ class SwarmRunner:
                     warned[k] = True
                     self._warn(templates[k], threshold)
             new_fp = self._fingerprint()
-            if new_fp != fp or self._mid:
+            if new_fp != fp:
                 fp, changed_at = new_fp, now
             if evaluate_done(self.ledger).done:
                 return "done"
@@ -205,9 +219,18 @@ class SwarmRunner:
                 return "budget"
             if elapsed >= budget.wall_clock_s:
                 return "timeout"
-            if now - changed_at >= budget.stall_after_s:
+            if now - changed_at >= budget.stall_after_s and self._quiescent():
                 return "stalled"
             await self.sleep(TICK_S)
+
+    def _quiescent(self) -> bool:
+        """Every live peer is between episodes or has been repeatedly no-op."""
+        return all(
+            pid in self.retired
+            or (pid not in self._mid and not self._failures[pid])  # a failing peer is in back-off, not idle
+            or self._noop_streak[pid] >= 2
+            for pid in self.ids
+        )
 
     async def _grace(self) -> None:
         began = self.clock()

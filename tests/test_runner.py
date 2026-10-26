@@ -282,3 +282,54 @@ async def test_idle_peer_with_only_urgent_mail_stays_idle(ledger):
     runner, fakes, _ = build(ledger, roster, {})
     await runner.run()
     assert fakes["P02"].calls == 0
+
+
+async def test_noop_peers_stall_instead_of_spinning(ledger):
+    ledger.tasks.create_task(spec("A"))
+    roster = make_roster([("P01", "deepseek"), ("P02", "haiku")], stall_after_s=20, wall_clock_s=10000)
+    holder = {}
+
+    async def lazy(peer, text, n):
+        await holder["rc"].sleep(3)  # LLM latency, does nothing
+
+    runner, fakes, rc = build(ledger, roster, {"P01": lazy, "P02": lazy})
+    holder["rc"] = rc
+    res = await runner.run()
+    assert res.status == "stalled" and res.elapsed_s < 10000
+    for pid in ("P01", "P02"):
+        assert res.episodes[pid] < 40
+        assert sum(NUDGE in t for t in fakes[pid].inputs) <= 1
+
+
+async def test_long_working_episode_is_not_a_stall(ledger):
+    ledger.tasks.create_task(spec("A"))
+    roster = make_roster([("P01", "deepseek"), ("P02", "haiku")], stall_after_s=20, wall_clock_s=10000)
+    holder = {}
+
+    async def slow_worker(peer, text, n):
+        await holder["rc"].sleep(60)
+        worker(ledger, "deepseek", "A")(peer, text, n)
+
+    runner, _, rc = build(ledger, roster, {"P01": slow_worker, "P02": reviewer(ledger, "anthropic")})
+    holder["rc"] = rc
+    res = await runner.run()
+    assert res.status == "done"
+
+
+async def test_done_during_grace_wins_over_timeout(ledger):
+    ledger.tasks.create_task(spec("A"))
+    ledger.tasks.claim("A", "P01", "deepseek")
+    art = ledger.artifacts.commit("A", "P01", "x" * 300)
+    review = ledger.tasks.submit_for_review("A", "P01", art.id)
+    roster = make_roster([("P01", "deepseek"), ("P02", "haiku")], wall_clock_s=5)
+    holder = {}
+
+    async def slow_review(peer, text, n):
+        ledger.tasks.claim(review.id, "P02", "anthropic")
+        await holder["rc"].sleep(8)  # outlives the timeout; completes inside the grace period
+        ledger.tasks.record_verdict(review.id, "P02", True, "ok")
+
+    runner, _, rc = build(ledger, roster, {"P02": slow_review})
+    holder["rc"] = rc
+    res = await runner.run()
+    assert res.done.done and res.status == "done"
