@@ -63,3 +63,22 @@ def approve_through_review(ledger, task_id):
     review = ledger.tasks.submit_for_review(task_id, t.owner, art.id)
     ledger.tasks.claim(review.id, "P03", "anthropic")
     return ledger.tasks.record_verdict(review.id, "P03", True, "looks good")
+
+
+def task_args(**overrides):
+    """Valid args dict for the create_task tool, with overrides applied."""
+    args = {
+        "title": "Sub task",
+        "objective": "Produce the deliverable described by this task.",
+        "output_format": "Markdown document with headings.",
+        "acceptance": ["criterion one", "criterion two", "criterion three"],
+        "deps": [],
+    }
+    args.update(overrides)
+    return args
+
+
+def make_tools_by_name(agent_id, ledger, family="deepseek"):
+    from agora.tools import make_peer_tools
+
+    return {t.name: t for t in make_peer_tools(agent_id, family, ledger)}
