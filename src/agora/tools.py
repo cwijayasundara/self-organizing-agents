@@ -11,6 +11,10 @@ from agora.ledger.types import LedgerError, Task, TaskSpec
 from agora.render import note_line, render_notes, task_line, wrap_block, wrap_lines
 
 
+MAX_NOTES = 50
+MAX_ARTIFACT_CHARS = 20000
+
+
 def _safe(fn):
     @functools.wraps(fn)
     def inner(*args, **kwargs):
@@ -33,7 +37,7 @@ def make_peer_tools(agent_id: str, family: str, ledger: Ledger) -> list[BaseTool
 
     def board_read(since_id: int = 0) -> str:
         """Read the notes posted to the shared board after note id since_id (0 for the latest notes)."""
-        return render_notes(ledger.board.recent(since_id=since_id))
+        return render_notes(ledger.board.recent(limit=MAX_NOTES, since_id=since_id))
 
     def board_write(type: str, text: str, task_id: str | None = None, detail: str | None = None) -> str:
         """Post a typed note (FACT, OBSERVED, FAIL, CLAIM, PATCH_SUMMARY, DISSENT or DECISION) to the shared board."""
@@ -44,7 +48,11 @@ def make_peer_tools(agent_id: str, family: str, ledger: Ledger) -> list[BaseTool
 
     def board_grep(query: str) -> str:
         """Search all board notes (text and detail) with a query when you need earlier evidence."""
-        return render_notes(ledger.board.grep(query))
+        found = ledger.board.grep(query)
+        out = render_notes(found[-MAX_NOTES:])
+        if len(found) > MAX_NOTES:
+            out += f"\n({len(found) - MAX_NOTES} more matches; narrow your query)"
+        return out
 
     def board_unfold(note_id: int) -> str:
         """Show the full text and detail of one board note by its numeric id."""
@@ -99,7 +107,10 @@ def make_peer_tools(agent_id: str, family: str, ledger: Ledger) -> list[BaseTool
             a = ledger.artifacts.latest(task_id)
         if a is None:
             raise LedgerError(f"no artifact for {task_id}")
-        return f"{a.id} by {a.author}\n{wrap_block(a.content)}"
+        out = f"{a.id} by {a.author}\n{wrap_block(a.content[:MAX_ARTIFACT_CHARS])}"
+        if len(a.content) > MAX_ARTIFACT_CHARS:
+            out += f"\n(truncated: {len(a.content) - MAX_ARTIFACT_CHARS} more characters)"
+        return out
 
     def send_dm(to: str, text: str, urgent: bool = True) -> str:
         """Send a direct message to one peer when you need their attention on something specific."""
