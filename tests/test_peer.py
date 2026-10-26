@@ -12,6 +12,16 @@ async def test_task_tool_hidden_and_peer_tools_visible(ledger):
     await peer_for(model, ledger).ainvoke({"messages": [("user", "go")]}, config=cfg("P01"))
     names = set(model.bound_tools[-1])
     assert "task" not in names and {"claim_task", "board_write"} <= names
+    assert all("task" not in tools for tools in model.bound_tools)
+
+
+async def test_task_tool_cannot_be_called(ledger):
+    model = ScriptedChatModel(script=[
+        tool_call("task", {"description": "x", "subagent_type": "general-purpose"}), AIMessage("ok")])
+    out = await peer_for(model, ledger).ainvoke({"messages": [("user", "go")]}, config=cfg("P01"))
+    tool_msg = [m for m in out["messages"] if m.type == "tool"][0]
+    assert "not available" in tool_msg.content
+    assert len(model.seen) == 2  # no sub-agent model call
 
 
 async def test_turn_start_delta_message(ledger):
@@ -64,9 +74,16 @@ async def test_peer_notice_appended_to_tool_result(ledger):
 
 async def test_peer_notice_shows_each_fail_once_and_skips_own_notes(ledger):
     model = ScriptedChatModel(script=[tool_call("list_tasks", {}), tool_call("list_tasks", {}), AIMessage("ok")])
-    ledger.board.write_note("P02", "FAIL", "scraper approach does not work")
-    ledger.board.write_note("P01", "FAIL", "my own failure")
-    ledger.board.write_note("P02", "FACT", "plain fact")
+    orig = model._generate
+
+    def gen(messages, *a, **k):
+        if not model.seen:  # notes arrive during the episode
+            ledger.board.write_note("P02", "FAIL", "scraper approach does not work")
+            ledger.board.write_note("P01", "FAIL", "my own failure")
+            ledger.board.write_note("P02", "FACT", "plain fact")
+        return orig(messages, *a, **k)
+
+    object.__setattr__(model, "_generate", gen)
     out = await peer_for(model, ledger).ainvoke({"messages": [("user", "go")]}, config=cfg("P01"))
     first, second = [m for m in out["messages"] if m.type == "tool"][:2]
     assert "scraper approach does not work" in first.content
@@ -107,3 +124,46 @@ def test_summarization_trigger_follows_max_prompt_tokens(ledger, monkeypatch):
     peer_for(ScriptedChatModel(script=[]), ledger, max_prompt_tokens=90000)
     summ = [m for m in captured["middleware"] if m.name == "SummarizationMiddleware"]
     assert len(summ) == 1 and summ[0]._lc_helper.trigger == ("tokens", 90000)
+
+
+async def test_urgent_dm_survives_command_result_and_is_delivered_once(ledger):
+    ledger.mail.register(["P01", "P02"])
+    ledger.mail.send("P02", "P01", "switch to Spain", urgent=True)
+    todos = [{"content": "a", "status": "pending"}]
+    model = ScriptedChatModel(script=[tool_call("write_todos", {"todos": todos}),
+                                      tool_call("list_tasks", {}), AIMessage("ok")])
+    out = await peer_for(model, ledger).ainvoke({"messages": [("user", "go")]}, config=cfg("P01"))
+    texts = [str(m.content) for m in out["messages"] if m.type == "tool"]
+    assert sum("switch to Spain" in t for t in texts) == 1
+    assert ledger.mail.take("P01", urgent_only=True) == []
+
+
+async def test_preexisting_notes_not_replayed_in_tool_results(ledger):
+    for i in range(300):
+        ledger.board.write_note("P02", "CLAIM", f"angle {i}")
+    model = ScriptedChatModel(script=[tool_call("list_tasks", {}), tool_call("list_tasks", {}), AIMessage("ok")])
+    peer = peer_for(model, ledger)
+    # a note written during the episode (from a tool call) must still show up
+    orig = model._generate
+
+    def gen(messages, *a, **k):
+        if len(model.seen) == 1:
+            ledger.board.write_note("P02", "FAIL", "mid-episode failure")
+        return orig(messages, *a, **k)
+
+    object.__setattr__(model, "_generate", gen)
+    out = await peer.ainvoke({"messages": [("user", "go")]}, config=cfg("P01"))
+    first, second = [m for m in out["messages"] if m.type == "tool"][:2]
+    assert "PEER NOTICES:" not in first.content
+    assert "mid-episode failure" in second.content and "angle 1" not in second.content
+
+
+async def test_between_episode_notes_in_snapshot_not_in_notices(ledger):
+    model = ScriptedChatModel(script=[AIMessage("ok"), tool_call("list_tasks", {}), AIMessage("ok")])
+    peer = peer_for(model, ledger)
+    await peer.ainvoke({"messages": [("user", "go")]}, config=cfg("P01"))
+    ledger.board.write_note("P02", "FAIL", "between episodes failure")
+    out = await peer.ainvoke({"messages": [("user", "again")]}, config=cfg("P01"))
+    assert "between episodes failure" in "\n".join(str(m.content) for m in model.seen[-2])
+    tool_msg = [m for m in out["messages"] if m.type == "tool"][0]
+    assert "between episodes failure" not in tool_msg.content
