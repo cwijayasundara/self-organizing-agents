@@ -26,10 +26,15 @@ def _parse(raw: object, index: int) -> TaskSpec:
     for key in ("acceptance", "deps"):
         if not isinstance(raw[key], list):
             raise ConfigError(f"task {name}: {key} must be a list")
+    required = raw.get("required", True)
+    if not isinstance(required, bool):
+        raise ConfigError(f"task {name}: required must be true or false")
+    if kind == "integration" and not required:
+        raise ConfigError(f"task {name}: integration task must be required")
     return TaskSpec(
         id=str(raw["id"]), title=str(raw["title"]), objective=str(raw["objective"]),
         output_format=str(raw["output_format"]), acceptance=[str(a) for a in raw["acceptance"]],
-        deps=[str(d) for d in raw["deps"]], required=bool(raw.get("required", True)), kind=kind,
+        deps=[str(d) for d in raw["deps"]], required=required, kind=kind,
     )
 
 
@@ -77,7 +82,7 @@ def load_template(path: str) -> list[TaskSpec]:
             if d not in seen:
                 raise ConfigError(f"task {s.id}: unknown dependency {d}")
     _topo(specs)
-    if not any(s.kind == "integration" for s in specs):
+    if not any(s.kind == "integration" and s.required for s in specs):
         raise ConfigError("template has no task of kind: integration")
     return specs
 

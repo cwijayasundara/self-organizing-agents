@@ -116,3 +116,27 @@ def test_done_only_when_all_required_done(ledger):
 
 def test_empty_ledger_not_done(ledger):
     assert evaluate_done(ledger) == DoneStatus(False, [])
+
+
+def test_optional_integration_rejected(tmp_path):
+    p = tpl(tmp_path, task_yaml("A"), task_yaml("I", ["A"], "integration", "    required: false\n"))
+    with pytest.raises(ConfigError, match="I"):
+        load_template(p)
+
+
+def test_only_integration_not_required_rejected(tmp_path):
+    p = tpl(tmp_path, task_yaml("I", [], "integration", "    required: false\n"))
+    with pytest.raises(ConfigError, match="integration"):
+        load_template(p)
+
+
+@pytest.mark.parametrize("value", ["", "0", '"false"', '"yes"'])
+def test_required_must_be_bool(tmp_path, value):
+    p = tpl(tmp_path, task_yaml("A", extra=f"    required: {value}\n"), task_yaml("I", [], "integration"))
+    with pytest.raises(ConfigError, match="A: required must be true or false"):
+        load_template(p)
+
+
+def test_required_omitted_defaults_true(tmp_path):
+    specs = load_template(tpl(tmp_path, task_yaml("A"), task_yaml("I", [], "integration")))
+    assert all(s.required is True for s in specs)
