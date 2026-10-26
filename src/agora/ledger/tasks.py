@@ -34,6 +34,7 @@ class TaskLedger:
         self.board = board
         self.clock = clock
         self.lease_s = lease_s
+        self.closed = False
 
     # ---- reads -------------------------------------------------------------
     def _task(self, r: sqlite3.Row, deps: list[str]) -> Task:
@@ -115,7 +116,16 @@ class TaskLedger:
         for dep in spec.deps:
             c.execute("INSERT OR IGNORE INTO task_deps (task_id, dep_id) VALUES (?,?)", (spec.id, dep))
 
+    def close(self) -> None:
+        """Refuse new tasks and submissions; verdicts, commits and seeding keep working."""
+        self.closed = True
+
+    def _refuse_if_closed(self) -> None:
+        if self.closed:
+            raise LedgerError("run is closing: no new tasks or submissions")
+
     def reserve(self, spec: TaskSpec) -> tuple[Task, bool]:
+        self._refuse_if_closed()
         with self.db.write() as c:
             row = c.execute(
                 "SELECT id FROM tasks WHERE title_key=? AND status<>'done' ORDER BY rowid LIMIT 1",
@@ -221,6 +231,7 @@ class TaskLedger:
     # ---- review gate -------------------------------------------------------
     def submit_for_review(self, task_id: str, agent_id: str, artifact_id: str) -> Task:
         """Move the work task to in_review and return the newly created review task."""
+        self._refuse_if_closed()
         work = self._require_owner(task_id, agent_id)
         if work.kind == "review":
             raise LedgerError("review tasks take a verdict, not an artifact; use review_verdict")

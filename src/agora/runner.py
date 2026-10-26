@@ -37,6 +37,8 @@ class RunResult:
     episodes: dict[str, int]
     retired: list[str]
     exhausted: list[str] = field(default_factory=list)
+    unreviewed: list[str] = field(default_factory=list)
+    errors: dict[str, str] = field(default_factory=dict)
 
 
 class SwarmRunner:
@@ -64,6 +66,7 @@ class SwarmRunner:
         self._warnings: dict[str, list[str]] = {pid: [] for pid in self.ids}
         self._mid: set[str] = set()
         self._stopping = False
+        self.errors: dict[str, str] = {}
 
     # ---- public --------------------------------------------------------------
     async def run(self) -> RunResult:
@@ -73,6 +76,7 @@ class SwarmRunner:
         try:
             status = await self._monitor(start)
             self._stopping = True
+            self.ledger.tasks.close()
             await self._grace()
             if evaluate_done(self.ledger).done:
                 status = "done"  # done wins: status == "done" iff result.done.done
@@ -91,6 +95,9 @@ class SwarmRunner:
             episodes=dict(self.episodes),
             retired=list(self.retired),
             exhausted=list(self.exhausted),
+            unreviewed=sorted(t.id for t in self.ledger.tasks.list()
+                              if not t.required and t.kind != "review" and t.status != "done"),
+            errors=dict(self.errors),
         )
 
     # ---- peer loop -----------------------------------------------------------
@@ -147,8 +154,12 @@ class SwarmRunner:
                 )
             except GraphRecursionError:
                 pass  # a normal episode end
-            except Exception:  # includes asyncio.TimeoutError from a stuck turn
+            except asyncio.TimeoutError:
                 failed = True
+                self.errors[pid] = "TimeoutError: episode exceeded stuck_turn_s"
+            except Exception as e:
+                failed = True
+                self.errors[pid] = f"{type(e).__name__}: {e}"[:200]
             finally:
                 self._mid.discard(pid)
             self.episodes[pid] += 1

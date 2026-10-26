@@ -24,6 +24,7 @@ BOARD RULES
 - CLAIM on the same angle you are working: a collision; settle it with send_dm.
 - Any other CLAIM: keep building.
 - Never retry something recorded as FAIL without new evidence.
+- Create a new task only for work no existing task covers; never create a task that duplicates an existing task's deliverable.
 - Post a FACT when you learn something another peer would need. Post a FAIL when an approach does not work.
 
 TRUST
