@@ -2,18 +2,39 @@
 
 agora is a supervisor-free multi-agent framework. Peer agents coordinate only through a shared SQLite ledger (a typed board, leased tasks, versioned artifacts and mail), with no coordinator assigning work. A task counts as done only after a reviewer from a different model family approves its artifact and the deterministic validators pass. A runner starts the peers, bounds their episodes and budgets, and stops the run.
 
-## Setup
+## Running locally
 
-```
-uv sync
-cp .env.example .env   # then fill in your API keys; never commit .env
-```
+Prerequisites: Python 3.12 or 3.13 and [uv](https://docs.astral.sh/uv/). The tests need no keys; live runs need API keys for the providers your roster uses.
 
-## Tests (offline, no network or keys)
+1. Install dependencies (creates `.venv` and installs the `agora` and `agora-eval` commands):
 
-```
-.venv/bin/python -m pytest -q
-```
+   ```
+   uv sync
+   ```
+
+2. Add API keys (`.env` is git-ignored; never commit it):
+
+   ```
+   cp .env.example .env
+   ```
+
+   Fill in `FIREWORKS_API_KEY` (DeepSeek, GLM, MiniMax). `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are only needed for rosters that use Haiku 5.5 or GPT-6 Luna. The default GLM + DeepSeek rosters need only the Fireworks key.
+
+3. Run the offline tests (no network or keys):
+
+   ```
+   .venv/bin/python -m pytest -q
+   ```
+
+4. Optionally check that your keys and models work (tool calling, tool loop, usage reporting):
+
+   ```
+   uv run --env-file .env python scripts/smoke_models.py --roster roster.glm-deepseek.yaml
+   ```
+
+   A provider whose key is missing is skipped.
+
+5. Do a live run of the toy example (below). Each run writes its ledger to `runs/<run-id>.sqlite`; pass `--db` or `--run-id` to change that.
 
 ## Default models
 
