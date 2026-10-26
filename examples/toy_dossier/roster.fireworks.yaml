@@ -1,0 +1,29 @@
+run_name: toy-fireworks
+
+models:
+  deepseek:
+    provider: fireworks
+    id: accounts/fireworks/models/deepseek-v4p1-flash-1017
+    family: deepseek
+    temperature: 1.0
+    price: {in_per_m: 0.30, cached_per_m: 0.006, out_per_m: 1.20}
+  minimax:
+    provider: fireworks
+    id: accounts/fireworks/models/minimax-m3p1-flash
+    family: minimax
+    price: {in_per_m: 0.15, cached_per_m: 0.015, out_per_m: 0.60}
+  glm:
+    provider: fireworks
+    id: accounts/fireworks/models/glm-5p3-flash
+    family: zhipu
+    price: {in_per_m: 0.15, cached_per_m: 0.03, out_per_m: 0.50}
+
+peers:
+  - {id: T01, model: deepseek, lens: financial arithmetic and margins}
+  - {id: T02, model: minimax, lens: competitor benchmarking}
+  - {id: T03, model: glm, lens: review and consistency}
+
+budget:
+  swarm_usd: 2
+  peer_usd: 0.8
+  wall_clock_s: 1200

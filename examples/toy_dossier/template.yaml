@@ -1,0 +1,29 @@
+tasks:
+  - id: competitors
+    title: Competitor price benchmark
+    objective: Compare the three named competitors' per-seat prices and positioning using only facts in the brief.
+    output_format: Markdown table plus a short paragraph, under 300 words.
+    acceptance:
+      - Every competitor named in the brief appears with its per-seat monthly price in EUR.
+      - States the minimum, maximum and average competitor price, computed correctly from the brief.
+      - Every number is traceable to a fact in the brief; no outside data is used.
+    deps: []
+  - id: pricing
+    title: Unit economics and price floor
+    objective: Compute the minimum per-seat monthly price that reaches the target margin given the cost facts in the brief.
+    output_format: Markdown with the calculation shown step by step, under 300 words.
+    acceptance:
+      - Computes the fully loaded cost per seat per month from the brief's cost facts.
+      - Derives the price floor for the target gross margin and shows the formula.
+      - Every number is traceable to a fact in the brief; no outside data is used.
+    deps: []
+  - id: summary
+    title: Launch price recommendation
+    objective: Recommend one launch price per seat per month for Germany, combining the competitor benchmark and the price floor.
+    output_format: Markdown memo, under 250 words.
+    acceptance:
+      - States one concrete EUR price per seat per month.
+      - The price is at or above the price floor and the memo explains where it sits relative to the competitor range.
+      - Cites the competitors and pricing artifacts by id and names one risk.
+    deps: [competitors, pricing]
+    kind: integration

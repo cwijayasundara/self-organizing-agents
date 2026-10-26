@@ -1,0 +1,30 @@
+run_name: toy
+
+models:
+  deepseek:
+    provider: fireworks
+    id: accounts/fireworks/models/deepseek-v4p1-flash-1017
+    family: deepseek
+    temperature: 1.0
+    price: {in_per_m: 0.30, cached_per_m: 0.006, out_per_m: 1.20}
+  haiku:
+    provider: anthropic
+    id: claude-haiku-5-5
+    family: anthropic
+    price: {in_per_m: 0.10, cached_per_m: 0.01, out_per_m: 0.50}
+  luna:
+    provider: openai
+    id: gpt-6-luna
+    family: openai
+    api: responses
+    price: {in_per_m: 0.10, cached_per_m: 0.01, out_per_m: 0.50}
+
+peers:
+  - {id: T01, model: deepseek, lens: financial arithmetic and margins}
+  - {id: T02, model: haiku, lens: competitor benchmarking}
+  - {id: T03, model: luna, lens: review and consistency}
+
+budget:
+  swarm_usd: 2
+  peer_usd: 0.8
+  wall_clock_s: 1200
