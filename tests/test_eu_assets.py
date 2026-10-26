@@ -189,3 +189,18 @@ def test_cli_domain_flag_wires_validators(tmp_path, monkeypatch, capsys):
 def test_cli_domain_unknown_name_exit_1(tmp_path, capsys):
     assert cli.main(_args(tmp_path, extra="data_dir: .", domain="nope")) == 1
     assert capsys.readouterr().err.startswith("error:")
+
+
+def test_brief_limit_matches_template_and_no_answer_like_citations():
+    import re
+    from agora.domain import extract_citations
+    brief = (EU / "brief.md").read_text()
+    assert "Keep the final dossier under 700 words (the DOSSIER_SUMMARY block does not count)." in brief
+    tpl = (EU / "template.yaml").read_text()
+    dossier = tpl[tpl.index("id: dossier"):]
+    nb = re.search(r"dossier under (\d+) words", brief).group(1)
+    nt = re.search(r"dossier, under (\d+) words", dossier).group(1)
+    assert nb == nt == "700"
+    for c in extract_citations(brief):
+        assert not c.startswith(("interviews/", "regulatory/")), c
+    assert "interviews/" not in brief and "regulatory/Poland" not in brief

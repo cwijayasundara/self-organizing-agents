@@ -50,7 +50,7 @@ MEMO_REGISTER = {
 
 
 CHURN_MARKERS = ["higher", "highest", "elevated", "anomal", "spike", "triple",
-                 "three times", "3x", "outlier"]
+                 "three times", "3x", "outlier", "four times", "4x", "quadruple"]
 
 
 def parse_csv(text: str) -> list[dict]:
@@ -127,13 +127,14 @@ def planted_facts(blocker: str, segment: str, competitor: str, delta: int,
                     f"A mandatory licence in {blocker} cannot be obtained within 18 months.",
                     [[b, "18 month"], [b, "block"], [b, "cannot obtain"],
                      [b, "unobtainable"], [b, "not obtainable"],
-                     [b, "cannot be obtained"]]),
+                     [b, "cannot be obtained"], [b, "18+"], [b, "18-"]]),
         PlantedFact("churn_anomaly",
                     f"The {segment} segment churns far more than the others.",
                     [[s, "churn", x] for x in CHURN_MARKERS]),
         PlantedFact("undercut", f"{competitor} prices about 30% below Lumen.",
                     [[k, "undercut"], [k, "cheaper"], [k, "lower price"],
-                     [k, "lowest price"], [k, "underpric"]]),
+                     [k, "lowest price"], [k, "underpric"],
+                     [k, "cheapest"], [k, "lower than"]]),
         PlantedFact("arith_mismatch",
                     f"The hiring summary total differs from the detail by {delta} EUR.",
                     [["hiring", "inconsisten"], ["hiring", "mismatch"],

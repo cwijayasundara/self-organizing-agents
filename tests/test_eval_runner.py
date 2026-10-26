@@ -94,7 +94,7 @@ def test_judge_failure_recorded_as_none_not_zero(cfg):
     _, text = gold_text(cfg)
     res = run(cfg, run_arm_fn=fake_arm(text), judges_override=judges("garbage", "garbage"))
     r = res.rows[0]
-    assert r.judge_mean is None and "judge" in r.notes
+    assert r.judge_mean is None and r.notes["judge_error"] == "unparsable after retry"
 
 
 def test_judge_timeout_recorded_as_none(cfg):
@@ -106,7 +106,7 @@ def test_judge_timeout_recorded_as_none(cfg):
 
     res = run(cfg, run_arm_fn=fake_arm(text), judges_override={"haiku": Hang(), "luna": Hang()},
               judge_timeout_s=0.05)
-    assert all(r.judge_mean is None and "timed out" in r.notes["judge"] for r in res.rows)
+    assert all(r.judge_mean is None and r.notes["judge_error"] == "timeout" for r in res.rows)
 
 
 def test_empty_dossier_skips_judge(cfg):
@@ -274,3 +274,35 @@ def test_rows_record_budget_in_notes(cfg):
     _, text = gold_text(cfg)
     res = run(cfg, run_arm_fn=fake_arm(text), judges_override=judges(GOOD, GOOD))
     assert res.rows[0].notes["budget_usd"] == cfg.budget_usd and res.rows[0].notes["wall_clock_s"] == 1500
+
+
+def test_judge_model_exception_reason_recorded(cfg):
+    _, text = gold_text(cfg)
+
+    class Boom(ScriptedChatModel):
+        def _generate(self, *a, **k):
+            raise RuntimeError("401 nope")
+
+    res = run(cfg, run_arm_fn=fake_arm(text), judges_override={"haiku": Boom(), "luna": Boom()})
+    assert res.rows[0].notes["judge_error"] == "RuntimeError: 401 nope"
+
+
+@pytest.mark.parametrize("exc", [asyncio.CancelledError, KeyboardInterrupt])
+def test_interrupted_run_records_spend_reraises_and_is_retried(cfg, exc):
+    _, text = gold_text(cfg)
+    spend_then_raise = _spending_arm(raise_after=False)
+
+    async def fn(*a):
+        await spend_then_raise(*a)
+        raise exc()
+
+    cfg1 = cfg.model_copy(update={"arms": ["c0-deepseek"]})
+    with pytest.raises(exc):
+        run(cfg1, run_arm_fn=fn, judges_override=judges())
+    lines = (Path(cfg.out_dir) / "results.jsonl").read_text().splitlines()
+    row = ResultRow.from_json(lines[0])
+    assert row.status == "error" and row.notes["error"] == "interrupted"
+    assert row.spend_usd == pytest.approx(0.65)
+    calls = []
+    res = run(cfg1, run_arm_fn=fake_arm(text, spend=0.5, calls=calls), judges_override=judges(GOOD))
+    assert len(calls) == 1 and res.spent_total_usd == pytest.approx(0.65 + 0.5)

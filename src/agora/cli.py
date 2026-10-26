@@ -14,7 +14,7 @@ from agora.domain import build_domain
 from agora.config import ConfigError, load_roster
 from agora.api import run_swarm
 from agora.ledger.types import LedgerError
-from agora.templates import load_template, seed_tasks
+from agora.templates import load_template
 from agora.validators import non_empty
 
 EXIT_CODES = {"done": 0, "budget": 2, "timeout": 3, "stalled": 4}

@@ -198,15 +198,16 @@ def test_gold_has_five_planted_facts_with_lowercase_detectors(tmp_path, variant)
     b = gold.blocker_country.lower()
     assert by_id["reg_blocker"] == [[b, x] for x in (
         "18 month", "block", "cannot obtain", "unobtainable", "not obtainable",
-        "cannot be obtained")]
+        "cannot be obtained")] + [[b, "18+"], [b, "18-"]]
     seg = gold.anomaly_segment.lower()
     assert by_id["churn_anomaly"] == [[seg, "churn", x] for x in (
         "higher", "highest", "elevated", "anomal", "spike", "triple",
-        "three times", "3x", "outlier")]
+        "three times", "3x", "outlier", "four times", "4x", "quadruple")]
     comp = gold.undercutting_competitor.lower()
     assert by_id["undercut"] == [[comp, "undercut"], [comp, "cheaper"],
                                  [comp, "lower price"], [comp, "lowest price"],
-                                 [comp, "underpric"]]
+                                 [comp, "underpric"], [comp, "cheapest"],
+                                 [comp, "lower than"]]
     d = int(gold.mismatch_delta_eur)
     assert by_id["arith_mismatch"][-2:] == [["hiring", str(d)], ["hiring", f"{d:,}"]]
     assert by_id["arith_mismatch"][:3] == [["hiring", "inconsisten"],
@@ -282,3 +283,23 @@ def test_positive_texts_match(tmp_path, variant):
     for fid, sent in sentences.items():
         for p in gold.planted:
             assert p.found_in(sent) == (p.id == fid), (fid, p.id)
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_new_detector_phrasings_match_only_their_fact(tmp_path, variant):
+    gold, _, _ = _gen(tmp_path, variant)
+    sentences = {
+        "churn_anomaly": f"{gold.anomaly_segment} churn is 4x the other segments",
+        "reg_blocker": f"{gold.blocker_country}: the licence takes 18+ months",
+        "undercut": f"{gold.undercutting_competitor} is the cheapest option",
+    }
+    for fid, sent in sentences.items():
+        for p in gold.planted:
+            assert p.found_in(sent) == (p.id == fid), (fid, p.id)
+    for sent in (f"{gold.anomaly_segment} churn is four times the rest",
+                 f"{gold.anomaly_segment} churn is quadruple the rest"):
+        assert {p.id for p in gold.planted if p.found_in(sent)} == {"churn_anomaly"}
+    assert {p.id for p in gold.planted if p.found_in(
+        f"{gold.blocker_country} takes 18- months")} == {"reg_blocker"}
+    assert {p.id for p in gold.planted if p.found_in(
+        f"{gold.undercutting_competitor} is lower than Lumen")} == {"undercut"}

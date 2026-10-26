@@ -17,7 +17,7 @@ All evidence is in a read-only data room mounted at `/data/`. Read its `README.m
 
 ## Citation rule
 
-Every factual claim must cite its source file in square brackets, with the path relative to the data-room root. Examples: `[crm_pipeline.csv]`, `[crm_pipeline.csv:rows 1-40]`, `[interviews/interview_07.md]`, `[regulatory/Poland.md]`. Do not write `/data/...` paths; they are rejected. Cite relative to the data-room root only.
+Every factual claim must cite its source file in square brackets, with the path relative to the data-room root. Examples: `[README.md]`, `[crm_pipeline.csv]`, `[crm_pipeline.csv:rows 1-40]`, `[cost_structure.csv]`. Do not write `/data/...` paths; they are rejected. Cite relative to the data-room root only.
 
 ## How to work with the evidence
 
@@ -33,6 +33,8 @@ Work like an auditor:
 Report any discrepancy, contradiction or risk you find in the evidence, with the files involved and the figures that differ.
 
 ## Final output format
+
+Keep the final dossier under 700 words (the DOSSIER_SUMMARY block does not count).
 
 The final dossier must end with the line `DOSSIER_SUMMARY` followed by a fenced json block with exactly these keys and no others:
 

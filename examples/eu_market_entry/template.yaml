@@ -131,7 +131,7 @@ tasks:
   title: EU market-entry decision dossier
   objective: Assemble the final decision dossier from all eleven sections and report every inconsistency
     found in the evidence.
-  output_format: Markdown dossier, under 700 words, ending with the DOSSIER_SUMMARY block.
+  output_format: Markdown dossier, under 700 words (the DOSSIER_SUMMARY block does not count), ending with the DOSSIER_SUMMARY block.
   acceptance:
   - Cites each section's artifact by its task id.
   - States one recommendation (enter or hold).

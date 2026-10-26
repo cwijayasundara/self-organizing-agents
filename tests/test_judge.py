@@ -4,7 +4,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from agora.dataroom.models import GoldKey, PlantedFact
-from agora.eval.judge import CRITERIA, JudgeResult, judge_dossier, pick_judge
+from agora.eval.judge import CRITERIA, JudgeResult, judge_dossier, judge_dossier_with_reason, pick_judge
 from tests.fakes import ScriptedChatModel
 
 DETECTOR = "zq-secret-detector-substr"
@@ -171,3 +171,20 @@ async def test_no_valid_object_retries_then_none():
     m = model(reply(clarity=0), "{}")
     assert await judge_dossier(m, "j", "d", gold()) is None
     assert len(m.seen) == 2
+
+
+async def test_reason_for_model_exception_excludes_dossier():
+    class Boom(ScriptedChatModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kw):
+            raise RuntimeError("401 bad credentials")
+
+    res, why = await judge_dossier_with_reason(Boom(), "j", "SECRET-DOSSIER", gold())
+    assert res is None and why == "RuntimeError: 401 bad credentials"
+    assert "SECRET-DOSSIER" not in why
+
+
+async def test_reason_for_unparsable_and_success():
+    res, why = await judge_dossier_with_reason(model("no", "no"), "j", "d", gold())
+    assert res is None and why == "unparsable after retry"
+    res, why = await judge_dossier_with_reason(model(reply()), "j", "d", gold())
+    assert res is not None and why is None

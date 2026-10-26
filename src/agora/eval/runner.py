@@ -17,7 +17,7 @@ from agora.dataroom.generate import generate_dataroom
 from agora.dataroom.models import GoldKey
 from agora.eval.arms import run_arm
 from agora.eval.config import EvalConfig
-from agora.eval.judge import judge_dossier, pick_judge
+from agora.eval.judge import judge_dossier_with_reason, pick_judge
 from agora.eval.meter import SpendMeter, detach_all
 from agora.eval.scoring import score_dossier
 from agora.models import build_model
@@ -116,14 +116,15 @@ async def _judge(cfg, judge_id, judge_model, dossier, gold, timeout_s):
         if model is None:
             model = build_model(spec)
         meter.attach(model, spec)
-        res = await asyncio.wait_for(judge_dossier(model, judge_id, dossier, gold), timeout=timeout_s)
+        res, why = await asyncio.wait_for(judge_dossier_with_reason(model, judge_id, dossier, gold),
+                                          timeout=timeout_s)
         if res is None:
-            return None, meter.total_usd, "judge returned no usable score"
+            return None, meter.total_usd, why or "no usable score"
         return res.mean, meter.total_usd, None
     except asyncio.TimeoutError:
-        return None, meter.total_usd, f"judge timed out after {timeout_s}s"
+        return None, meter.total_usd, "timeout"
     except Exception as e:
-        return None, meter.total_usd, f"judge failed: {type(e).__name__}: {str(e)[:200]}"
+        return None, meter.total_usd, f"{type(e).__name__}: {str(e)[:200]}"
     finally:
         if model is not None:
             detach_all(model)
@@ -229,6 +230,12 @@ async def _one_run(cfg, arm, variant, seed, brief, data_dir, db_path, gold, fact
             return ResultRow(arm, variant, seed, "error", spend, clock() - t0, 0.0, 0.0, False, 0.0, 0,
                              [], [], None, None, 0.0, "",
                              {**base_notes, "error": err, "acct_usd": acct.total_usd})
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            _append(out / "results.jsonl", ResultRow(
+                arm, variant, seed, "error", max(acct.total_usd, meter.total_usd), clock() - t0, 0.0, 0.0,
+                False, 0.0, 0, [], [], None, None, 0.0, "",
+                {**base_notes, "error": "interrupted", "acct_usd": acct.total_usd}))
+            raise
         except Exception as e:
             spend = max(acct.total_usd, meter.total_usd)
             return ResultRow(arm, variant, seed, "error", spend, clock() - t0, 0.0, 0.0, False, 0.0, 0,
@@ -260,6 +267,7 @@ async def _one_run(cfg, arm, variant, seed, brief, data_dir, db_path, gold, fact
                                                        judge_timeout_s)
             if note:
                 notes["judge"] = note
+                notes["judge_error"] = note
         return ResultRow(arm, variant, seed, outcome.status, spend, outcome.elapsed_s,
                          scores.recall, scores.summary_accuracy, scores.summary_present,
                          scores.citation_validity, scores.citations, list(scores.found),

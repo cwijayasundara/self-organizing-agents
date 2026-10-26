@@ -108,6 +108,9 @@ _CAVEATS = """\
 - Error rows (status "error") are not observations: they are excluded from means and the decision, and an interrupted or failed run is retried on resume (the latest row per run wins).
 - done_rate counts the baselines' "finished" (which includes hitting the episode cap) against the swarm's "done" and is not comparable.
 - With the example config every pilot run is judged by the same single judge (pick_judge rotation uses variant+seed).
+- peer_usd per swarm peer is budget/4.
+- The supervisor's subagent call limit is applied per delegation and is about 1.5x the single arm's per-episode calls (approximate step mapping).
+- The pre-registered rule requires BOTH margins for a win and BOTH for a loss (the plan text said "either" for a loss; the code and tests encode "both").
 - Arm asymmetries: validators are enforced only for the swarm arms; baselines stop at 90% of spend or 20 episodes; the subagent call limit is per delegation.
 """
 
