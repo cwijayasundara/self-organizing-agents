@@ -75,6 +75,16 @@ def _last_ai_text(messages) -> str:
     return ""
 
 
+async def read_final_text(agent, config: dict, fallback_reply: str = "") -> str:
+    """The dossier from the agent's state, else its last AI text, else fallback_reply.
+    Partial work survives budget stops and timeouts because it is read from the checkpoint."""
+    state = await agent.aget_state(config)
+    text = _read_file(state.values.get("files") or {}, DOSSIER_PATH)
+    if text is None:
+        text = _last_ai_text(state.values.get("messages")) or fallback_reply
+    return text
+
+
 async def drive_agent(agent, config: dict, first_message: str, continuation: str, budget: ArmBudget,
                       meter: SpendMeter, clock=time.monotonic, max_episodes: int = 20,
                       stop_fraction: float = 0.9) -> tuple[str, str, int, str]:
@@ -140,10 +150,7 @@ async def run_single_arm(arm: str, spec: ModelSpec, model: BaseChatModel, brief:
         status, reply, episodes, stop = await drive_agent(
             agent, config, FIRST_MESSAGE, CONTINUATION, budget, meter, clock=clock,
             max_episodes=max_episodes)
-        state = await agent.aget_state(config)  # partial work survives budget stops and timeouts
-        text = _read_file(state.values.get("files") or {}, DOSSIER_PATH)
-        if text is None:
-            text = _last_ai_text(state.values.get("messages")) or reply
+        text = await read_final_text(agent, config, reply)
     finally:
         detach_all(model)
     return ArmOutcome(arm=arm, variant=variant, seed=seed, status=status, final_text=text,
