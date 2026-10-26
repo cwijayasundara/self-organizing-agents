@@ -47,6 +47,30 @@ def test_gold_inside_dataroom_refused(tmp_path):
         generate_dataroom(0, str(out), str(out / "sub" / "gold.json"))
 
 
+def _case_insensitive(tmp_path) -> bool:
+    d = tmp_path / "CaseProbe"
+    d.mkdir()
+    return (tmp_path / "caseprobe").exists()
+
+
+def test_gold_inside_dataroom_refused_by_case_variant(tmp_path):
+    if not _case_insensitive(tmp_path):
+        pytest.skip("case-sensitive filesystem")
+    out = tmp_path / "room"
+    with pytest.raises(ValueError):
+        generate_dataroom(0, str(out), str(tmp_path / "ROOM" / "g.json"))
+
+
+def test_gold_inside_dataroom_refused_by_symlink(tmp_path):
+    out = tmp_path / "room"
+    out.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(out)
+    with pytest.raises(ValueError):
+        generate_dataroom(0, str(out), str(link / "g.json"))
+    assert not (out / "g.json").exists()
+
+
 def test_countries_and_segments_fixed(tmp_path):
     gold, out, _ = _gen(tmp_path, 1)
     assert gold.countries == COUNTRIES

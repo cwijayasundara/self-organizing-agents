@@ -1,6 +1,7 @@
 """Deterministic generator for the synthetic Lumen Analytics data room."""
 from __future__ import annotations
 
+import os
 import random
 from pathlib import Path
 
@@ -98,6 +99,13 @@ def _readme() -> str:
     return "\n".join(lines) + "\n"
 
 
+def _refuse_gold_in_room(out: Path, gold_file: Path) -> None:
+    """Refuse when any existing ancestor of gold_file is the data room (inode check)."""
+    for cand in [gold_file, *gold_file.parents]:
+        if cand.exists() and os.path.samefile(cand, out):
+            raise ValueError("gold_path must not be inside the data room")
+
+
 def generate_dataroom(variant: int, out_dir: str, gold_path: str) -> GoldKey:
     out = Path(out_dir).resolve()
     gold_file = Path(gold_path).resolve()
@@ -109,7 +117,9 @@ def generate_dataroom(variant: int, out_dir: str, gold_path: str) -> GoldKey:
     delta = rng.randint(20000, 120000)
     by_country, summary = _hiring(rng, delta)
     out.mkdir(parents=True, exist_ok=True)
+    _refuse_gold_in_room(out, gold_file)
     gold_file.parent.mkdir(parents=True, exist_ok=True)
+    _refuse_gold_in_room(out, gold_file)
     _write(out, "crm_pipeline.csv", _crm(rng, anomaly))
     _write(out, "cost_structure.csv", _costs(rng))
     _write(out, "competitor_prices.md", _prices(rng, undercutter))
