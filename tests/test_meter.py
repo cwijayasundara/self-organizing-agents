@@ -9,7 +9,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableLambda
 
 from agora.config import load_roster
-from agora.eval.meter import BudgetExceeded, SpendMeter
+from agora.eval.meter import BudgetExceeded, SpendMeter, detach_all
 from agora.ledger.budget import cost_of
 from agora.ledger.types import Usage
 from tests.fakes import ScriptedChatModel
@@ -88,6 +88,115 @@ def test_malformed_usage_does_not_raise():
     for _ in range(4):
         llm.invoke("a")
     assert m.total_usd >= 0.0
+    # clamped: cached 500 > input 100 costs as cached == input
+    clamped = SpendMeter(1e9)
+    clamped.attach(model(msg(100, 10, cached=500)), DS).invoke("a")
+    assert clamped.total_usd == pytest.approx(cost_of(DS, Usage(100, 100, 10)))
+
+
+@pytest.mark.parametrize("um", [
+    {"input_tokens": float("inf"), "output_tokens": float("inf")},
+    {"input_tokens": float("nan"), "output_tokens": float("nan")},
+    {"input_tokens": 10**400, "output_tokens": 10**400},
+    {"input_tokens": -1, "output_tokens": -1},
+    {"input_tokens": None, "output_tokens": None},
+    {"input_tokens": "abc", "output_tokens": "x"},
+    {"input_tokens": 10, "output_tokens": 5, "input_token_details": ["cache_read"]},
+    "not a dict",
+])
+def test_unusable_usage_never_raises(um):
+    m = SpendMeter(1e9)
+    ai = AIMessage("ok")
+    ai.usage_metadata = um  # type: ignore[assignment]
+    m.attach(model(ai), DS).invoke("a")
+    if isinstance(um, dict) and um.get("input_tokens") == 10:
+        assert m.total_usd == pytest.approx(cost_of(DS, Usage(10, 0, 5)))
+    else:
+        assert m.total_usd == 0.0
+
+
+def test_attach_twice_charges_once():
+    m = SpendMeter(100.0)
+    llm = model(msg())
+    m.attach(llm, DS)
+    m.attach(llm, DS)
+    llm.invoke("a")
+    assert m.total_usd == pytest.approx(cost_of(DS, Usage(1000, 0, 500)))
+
+
+def test_attach_two_specs_latter_wins():
+    m = SpendMeter(100.0)
+    hk = ROSTER.models["haiku"]
+    llm = model(msg())
+    m.attach(llm, DS)
+    m.attach(llm, hk)
+    llm.invoke("a")
+    assert m.by_model == {hk.key: pytest.approx(cost_of(hk, Usage(1000, 0, 500)))}
+
+
+def test_two_meters_count_independently():
+    a, b = SpendMeter(100.0), SpendMeter(100.0)
+    llm = model(msg())
+    a.attach(llm, DS)
+    b.attach(llm, DS)
+    llm.invoke("x")
+    unit = cost_of(DS, Usage(1000, 0, 500))
+    assert a.total_usd == pytest.approx(unit) and b.total_usd == pytest.approx(unit)
+
+
+def test_detach_only_removes_own_handler():
+    class H(BaseCallbackHandler):
+        pass
+
+    foreign = H()
+    a, b = SpendMeter(100.0), SpendMeter(100.0)
+    llm = model(msg())
+    llm.callbacks = [foreign]
+    a.attach(llm, DS)
+    b.attach(llm, DS)
+    assert a.detach(llm) is llm
+    assert foreign in llm.callbacks and len(llm.callbacks) == 2
+    llm.invoke("x")
+    assert a.total_usd == 0.0 and b.total_usd > 0
+    SpendMeter(1.0).detach(model())  # callbacks None is tolerated
+
+
+def test_detach_all_stops_old_meter():
+    old = SpendMeter(1e-9)
+    llm = model(msg(), msg())
+    old.attach(llm, DS)
+    with pytest.raises(BudgetExceeded):
+        llm.invoke("a")
+    spent = old.total_usd
+    assert detach_all(llm) is llm
+    llm.invoke("b")
+    assert old.total_usd == spent
+
+
+async def test_deep_agent_subagent_cap(tmp_path):
+    from deepagents import create_deep_agent
+    from langgraph.checkpoint.memory import InMemorySaver
+    from tests.fakes import call
+
+    m = SpendMeter(cost_of(DS, Usage(1000, 0, 500)) * 1.2)  # crossed only by the subagent's call
+    sup = m.attach(model(
+        AIMessage("", tool_calls=[call("task", {"description": "go", "subagent_type": "sub"})],
+                  usage_metadata={"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500}),
+        AIMessage("done"),
+    ), DS)
+    sub = m.attach(model(msg(), AIMessage("sub done")), ROSTER.models["haiku"])
+    graph = create_deep_agent(
+        model=sup,
+        subagents=[{"name": "sub", "description": "d", "system_prompt": "s", "model": sub}],
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "t"}, "recursion_limit": 25}
+    with pytest.raises(BudgetExceeded):
+        await graph.ainvoke({"messages": [("user", "hi")]}, config)
+    assert set(m.by_model) == {DS.key, ROSTER.models["haiku"].key}
+    assert m.by_model[DS.key] == pytest.approx(cost_of(DS, Usage(1000, 0, 500)))
+    assert m.by_model[ROSTER.models["haiku"].key] == pytest.approx(cost_of(ROSTER.models["haiku"], Usage(1000, 0, 500)))
+    assert graph.get_state(config).values["messages"]
 
 
 def test_reset_clears_totals():

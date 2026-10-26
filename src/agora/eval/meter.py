@@ -1,6 +1,7 @@
 """Hard-capped USD spend meter, attached to chat models via LangChain callbacks."""
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
@@ -14,6 +15,9 @@ from agora.ledger.budget import cost_of
 from agora.ledger.types import Usage
 
 
+log = logging.getLogger(__name__)
+
+
 class BudgetExceeded(Exception):
     """Raised from an LLM call once cumulative spend reaches the cap."""
 
@@ -21,7 +25,7 @@ class BudgetExceeded(Exception):
 def _count(v: Any) -> int:
     try:
         return max(int(v), 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -37,8 +41,11 @@ class _Handler(BaseCallbackHandler):
             for gen in gens:
                 message = getattr(gen, "message", None)
                 usage = getattr(message, "usage_metadata", None) if isinstance(message, AIMessage) else None
-                if usage:
-                    self.meter._record(self.spec, usage)
+                if isinstance(usage, dict) and usage:
+                    try:
+                        self.meter._record(self.spec, usage)
+                    except Exception:  # unusable usage is treated as absent
+                        log.debug("ignoring unusable usage_metadata: %r", usage, exc_info=True)
         self.meter.check()
 
 
@@ -48,21 +55,37 @@ class SpendMeter:
         self._lock = threading.Lock()
         self._by_model: dict[str, float] = {}
 
-    def attach(self, model: BaseChatModel, spec: ModelSpec) -> BaseChatModel:
+    @staticmethod
+    def _handlers(model: BaseChatModel) -> list:
         existing = model.callbacks
         if existing is None:
-            handlers: list = []
-        elif isinstance(existing, list):
-            handlers = list(existing)
-        else:  # a BaseCallbackManager
-            handlers = list(existing.handlers)
-        handlers.append(_Handler(self, spec))
+            return []
+        if isinstance(existing, list):
+            return list(existing)
+        return list(existing.handlers)  # a BaseCallbackManager
+
+    def attach(self, model: BaseChatModel, spec: ModelSpec) -> BaseChatModel:
+        """Idempotent per meter: re-attaching replaces this meter's spec. Several meters may
+        be attached to one model; each counts independently."""
+        handlers = self._handlers(model)
+        mine = [h for h in handlers if isinstance(h, _Handler) and h.meter is self]
+        if mine:
+            mine[0].spec = spec
+            handlers = [h for h in handlers if h not in mine[1:]]
+        else:
+            handlers.append(_Handler(self, spec))
         model.callbacks = handlers
+        return model
+
+    def detach(self, model: BaseChatModel) -> BaseChatModel:
+        """Remove this meter's handler(s); other callbacks are preserved."""
+        model.callbacks = [h for h in self._handlers(model) if not (isinstance(h, _Handler) and h.meter is self)]
         return model
 
     def _record(self, spec: ModelSpec, usage: Any) -> None:
         inp = _count(usage.get("input_tokens"))
-        cached = min(_count((usage.get("input_token_details") or {}).get("cache_read")), inp)
+        details = usage.get("input_token_details")
+        cached = min(_count(details.get("cache_read")) if isinstance(details, dict) else 0, inp)
         out = _count(usage.get("output_tokens"))
         usd = cost_of(spec, Usage(input_tokens=inp, cached_input_tokens=cached, output_tokens=out))
         with self._lock:
@@ -72,7 +95,7 @@ class SpendMeter:
         """Raise BudgetExceeded if the cap has been reached (callers may also poll this)."""
         total = self.total_usd
         if total >= self.cap_usd:
-            raise BudgetExceeded(f"spend ${total:.4f} reached cap ${self.cap_usd:.4f}")
+            raise BudgetExceeded(f"spend ${total:.6f} reached cap ${self.cap_usd:.6f}")
 
     @property
     def total_usd(self) -> float:
@@ -87,3 +110,9 @@ class SpendMeter:
     def reset(self) -> None:
         with self._lock:
             self._by_model.clear()
+
+
+def detach_all(model: BaseChatModel) -> BaseChatModel:
+    """Remove every meter handler (of any meter) from a reused model."""
+    model.callbacks = [h for h in SpendMeter._handlers(model) if not isinstance(h, _Handler)]
+    return model
