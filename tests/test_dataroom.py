@@ -196,11 +196,17 @@ def test_gold_has_five_planted_facts_with_lowercase_detectors(tmp_path, variant)
                 assert s == s.lower()
     by_id = {p.id: p.detectors for p in gold.planted}
     b = gold.blocker_country.lower()
-    assert by_id["reg_blocker"] == [[b, "licen"], [b, "block"]]
-    assert by_id["churn_anomaly"] == [[gold.anomaly_segment.lower(), "churn"]]
+    assert by_id["reg_blocker"] == [[b, x] for x in (
+        "18 month", "block", "cannot obtain", "unobtainable", "not obtainable",
+        "cannot be obtained")]
+    seg = gold.anomaly_segment.lower()
+    assert by_id["churn_anomaly"] == [[seg, "churn", x] for x in (
+        "higher", "highest", "elevated", "anomal", "spike", "triple",
+        "three times", "3x", "outlier")]
     comp = gold.undercutting_competitor.lower()
     assert by_id["undercut"] == [[comp, "undercut"], [comp, "cheaper"],
-                                 [comp, "lower price"], [comp, "below"]]
+                                 [comp, "lower price"], [comp, "lowest price"],
+                                 [comp, "underpric"]]
     d = int(gold.mismatch_delta_eur)
     assert by_id["arith_mismatch"][-2:] == [["hiring", str(d)], ["hiring", f"{d:,}"]]
     assert by_id["arith_mismatch"][:3] == [["hiring", "inconsisten"],
@@ -234,3 +240,45 @@ def test_no_planted_answer_in_dataroom_text(tmp_path, variant):
                 assert w not in text, (p.name, w)
     memo = (out / "regulatory" / f"{gold.blocker_country}.md").read_text(encoding="utf-8")
     assert "blocker" not in memo.lower() and "planted" not in memo.lower()
+
+
+def test_found_in_per_line_semantics():
+    from agora.dataroom.models import PlantedFact
+    f = PlantedFact("x", "d", [["poland", "block"]])
+    assert not f.found_in("Poland\nblocked")
+    assert not f.found_in("")
+    assert f.found_in("POLAND is blocked")
+    assert f.found_in("a\n\nPoland blocked here")
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_naive_dossier_finds_nothing(tmp_path, variant):
+    gold, _, _ = _gen(tmp_path, variant)
+    naive = (f"All five markets ({', '.join(COUNTRIES)}) require a data-processing "
+             f"licence.\nChurn by segment: SMB, Mid-market, Enterprise reviewed.\n"
+             f"Competitors Notiva, Veridia, Quanta Metrics, Brightline price below or "
+             f"near Lumen. {gold.undercutting_competitor} {gold.blocker_country} "
+             f"{gold.anomaly_segment}\n")
+    by_id = {p.id: p for p in gold.planted}
+    for k in ("reg_blocker", "churn_anomaly", "undercut"):
+        assert not by_id[k].found_in(naive), k
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_positive_texts_match(tmp_path, variant):
+    gold, _, _ = _gen(tmp_path, variant)
+    d = int(gold.mismatch_delta_eur)
+    sentences = {
+        "reg_blocker": f"{gold.blocker_country}: the mandatory licence cannot be "
+                       f"obtained within 18 months",
+        "churn_anomaly": f"{gold.anomaly_segment} churn is three times higher than "
+                         f"other segments",
+        "undercut": f"{gold.undercutting_competitor} is cheaper than Lumen",
+        "arith_mismatch": f"the hiring summary total is inconsistent with the "
+                          f"by-country rows (off by {d:,})",
+        "misleading_quote": f"{gold.misleading_interview} is misleading: it "
+                            f"contradicts the CRM",
+    }
+    for fid, sent in sentences.items():
+        for p in gold.planted:
+            assert p.found_in(sent) == (p.id == fid), (fid, p.id)

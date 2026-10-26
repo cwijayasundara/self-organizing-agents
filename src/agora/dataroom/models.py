@@ -10,6 +10,13 @@ class PlantedFact:
     description: str
     detectors: list[list[str]]  # OR of AND-groups of lowercase substrings
 
+    def found_in(self, text: str) -> bool:
+        """True iff one single line holds every substring of some detector group."""
+        for line in text.lower().split("\n"):
+            if line.strip() and any(all(sub in line for sub in g) for g in self.detectors):
+                return True
+        return False
+
 
 @dataclass(frozen=True)
 class GoldKey:
