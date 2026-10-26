@@ -1,0 +1,33 @@
+run_name: eu-market-entry
+
+models:
+  deepseek:
+    provider: fireworks
+    id: accounts/fireworks/models/deepseek-v4p1-flash-1017
+    family: deepseek
+    temperature: 1.0
+    price: {in_per_m: 0.30, cached_per_m: 0.006, out_per_m: 1.20}
+  glm:
+    provider: fireworks
+    id: accounts/fireworks/models/glm-5p3-flash
+    family: zhipu
+    price: {in_per_m: 0.15, cached_per_m: 0.03, out_per_m: 0.50}
+
+peers:
+  - {id: P01, model: deepseek, lens: financial model and unit economics}
+  - {id: P02, model: deepseek, lens: go/no-go recommendation and scenario logic}
+  - {id: P03, model: deepseek, lens: regulatory and data-protection risk}
+  - {id: P04, model: deepseek, lens: cross-section validation and review}
+  - {id: P05, model: deepseek, lens: pricing and packaging}
+  - {id: P06, model: glm, lens: market sizing}
+  - {id: P07, model: glm, lens: competitor landscape and price benchmarking}
+  - {id: P08, model: glm, lens: go-to-market and sales capacity}
+  - {id: P09, model: glm, lens: customer-interview evidence}
+  - {id: P10, model: glm, lens: operations cost and integration editing}
+
+budget:
+  swarm_usd: 3
+  peer_usd: 0.6
+  wall_clock_s: 1500
+
+data_dir: data/eu/v0

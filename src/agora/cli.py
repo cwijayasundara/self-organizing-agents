@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+from agora.domain import build_domain
 from agora.config import ConfigError, load_roster
 from agora.api import run_swarm
 from agora.ledger.types import LedgerError
@@ -41,11 +42,14 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--brief", required=True)
     run.add_argument("--db", default=None, help="ledger path (default runs/<run-id>.sqlite)")
     run.add_argument("--run-id", default=None, help="default: UTC timestamp")
+    run.add_argument("--domain", default=None, help="domain validators/admission (needs roster data_dir)")
     return p
 
 
 def _run(args: argparse.Namespace) -> int:
     roster = load_roster(args.roster)
+    if args.domain and roster.data_dir is None:
+        raise ConfigError("--domain needs a roster with data_dir")
     specs = load_template(args.template)
     brief = Path(args.brief).read_text()
 
@@ -55,7 +59,10 @@ def _run(args: argparse.Namespace) -> int:
         raise ConfigError(f"ledger {db_path} already exists (choose another --run-id or --db)")
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    outcome = run_swarm(roster, specs, brief, db_path, validators=[non_empty()])
+    validators, admission = [non_empty()], []
+    if args.domain:
+        validators, admission = build_domain(args.domain, roster.data_dir)
+    outcome = run_swarm(roster, specs, brief, db_path, validators=validators, admission=admission)
     result, ledger = outcome.result, outcome.ledger
     tasks = []
     for t in ledger.tasks.list():

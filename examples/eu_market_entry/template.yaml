@@ -1,0 +1,152 @@
+tasks:
+- id: sizing
+  title: Market sizing by country
+  objective: Size the addressable market for each of the five candidate countries from the CRM export
+    and cost files.
+  output_format: Markdown table plus notes, under 350 words.
+  acceptance:
+  - Gives accounts, pipeline stage counts and churn per country, computed from [crm_pipeline.csv] with
+    the row range cited.
+  - Breaks the same figures down by customer segment and states the churn rate per segment.
+  - Shows each calculation (counts, ratios) so a reviewer can recompute it.
+  - Cites a data-room file in [file] form for every figure.
+  deps: []
+- id: competitors
+  title: Competitor price benchmark
+  objective: Benchmark Lumen's per-seat price against each competitor in the data room.
+  output_format: Markdown table plus a short paragraph, under 350 words.
+  acceptance:
+  - Lists each competitor with its per-seat monthly price per country, cited from [competitor_prices.md].
+  - Computes the minimum, maximum and average competitor price per country and the gap to Lumen's list
+    price.
+  - Notes any competitor price that differs from other evidence, citing both files in [file] form.
+  deps: []
+- id: pricing
+  title: Price and packaging
+  objective: Propose a per-seat monthly price and packaging for the EU, supported by cost and competitor
+    evidence.
+  output_format: Markdown with the calculation shown step by step, under 350 words.
+  acceptance:
+  - Computes the unit cost per seat from [cost_structure.csv], citing the lines used.
+  - Derives a price floor and a recommended price in EUR, showing the formula and comparing with [competitor_prices.md].
+  - Quotes at least two customer statements about price from [interviews/interview_NN.md] files, cited
+    in [file] form.
+  deps: []
+- id: gtm
+  title: Go-to-market and sales capacity
+  objective: Plan the go-to-market motion and the sales capacity needed in each country.
+  output_format: Markdown, under 350 words.
+  acceptance:
+  - States the number of hires and the role mix per country, computed from [hiring_costs_by_country.csv].
+  - Estimates achievable new accounts per sales head from the stage counts in [crm_pipeline.csv].
+  - Names the main constraint on sales capacity and cites the file that shows it in [file] form.
+  deps: []
+- id: customer_evidence
+  title: Customer interview evidence
+  objective: Synthesise what the customer interviews say about demand, price and switching.
+  output_format: Markdown, under 350 words.
+  acceptance:
+  - Cites at least five distinct interviews as [interviews/interview_NN.md], each with the point it supports.
+  - Checks each interview's claims against [crm_pipeline.csv] and says where they agree or conflict.
+  - Separates stated opinion from measured data and says which is stronger for each conclusion.
+  deps: []
+- id: regulatory
+  title: Regulatory and data-protection review
+  objective: Review the regulatory file for each candidate country and list the obligations and obstacles
+    for a SaaS analytics vendor.
+  output_format: Markdown table plus notes, under 350 words.
+  acceptance:
+  - Covers all five countries, each citing its own [regulatory/<Country>.md] file.
+  - For each country lists licensing, data-residency and registration requirements with the lead time
+    stated in the file.
+  - States which obligations could delay launch beyond 18 months and why, with citations in [file] form.
+  deps: []
+- id: ops_cost
+  title: Operations and entry cost
+  objective: Compute the operating and market-entry cost of each country.
+  output_format: Markdown table plus notes, under 350 words.
+  acceptance:
+  - Lists per-country entry costs from [cost_structure.csv] and per-country hiring cost from [hiring_costs_by_country.csv].
+  - Recomputes the hiring total from [hiring_costs_by_country.csv] and compares it with [hiring_costs_summary.csv],
+    showing both numbers.
+  - Reports every figure that does not reconcile between files, citing both.
+  deps: []
+- id: country_sequence
+  title: Country entry order
+  objective: Rank the five countries for entry using the sizing, regulatory and cost sections.
+  output_format: Markdown ranked list with a reason each, under 350 words.
+  acceptance:
+  - Ranks all five countries, best first, with one reason per country that cites a data-room file in [file]
+    form.
+  - Uses sizing figures, regulatory lead times and entry costs from the dependency sections, citing their
+    task ids.
+  - States the tie-breaking rule used and what evidence would change the order.
+  deps:
+  - sizing
+  - regulatory
+  - ops_cost
+- id: pnl_3yr
+  title: Three-year P&L
+  objective: Build a 3-year P&L for the recommended entry plan.
+  output_format: Markdown table (years 1-3) plus assumptions, under 350 words.
+  acceptance:
+  - Shows revenue, cost and operating profit for each year, with formulas and the price from the pricing
+    section.
+  - Takes costs from [cost_structure.csv] and [hiring_costs_by_country.csv], cited in [file] form.
+  - Takes account volumes and churn from [crm_pipeline.csv] and states the assumptions explicitly.
+  - Includes a downside case with one changed assumption and its effect on year-3 profit.
+  deps:
+  - sizing
+  - pricing
+  - gtm
+  - ops_cost
+- id: risk_register
+  title: Risk register
+  objective: List the main risks of entering, with likelihood, impact and mitigation.
+  output_format: Markdown table, under 350 words.
+  acceptance:
+  - Lists at least six risks, each with likelihood, impact and a mitigation.
+  - Each risk cites the data-room file that evidences it, in [file] form (regulatory, competitor or interview
+    files).
+  - Includes any contradiction or inconsistency found in the evidence as its own risk item.
+  deps:
+  - regulatory
+  - competitors
+  - customer_evidence
+- id: recommendation
+  title: Enter or hold recommendation
+  objective: Combine the country order, P&L and risk register into one enter-or-hold recommendation.
+  output_format: Markdown memo, under 300 words.
+  acceptance:
+  - 'States exactly one recommendation: enter or hold.'
+  - Justifies it with figures from the P&L and the country order, citing data-room files in [file] form.
+  - Names the conditions or evidence that would reverse the recommendation.
+  deps:
+  - country_sequence
+  - pnl_3yr
+  - risk_register
+- id: dossier
+  title: EU market-entry decision dossier
+  objective: Assemble the final decision dossier from all eleven sections and report every inconsistency
+    found in the evidence.
+  output_format: Markdown dossier, under 700 words, ending with the DOSSIER_SUMMARY block.
+  acceptance:
+  - Cites each section's artifact by its task id.
+  - States one recommendation (enter or hold).
+  - Lists the country order, best first, with one reason per country citing a data-room file in [file]
+    form.
+  - Reports every inconsistency or contradiction found in the evidence, with the files involved, and ends
+    with the DOSSIER_SUMMARY block in the exact format given in the brief.
+  deps:
+  - sizing
+  - competitors
+  - pricing
+  - gtm
+  - customer_evidence
+  - regulatory
+  - ops_cost
+  - country_sequence
+  - pnl_3yr
+  - risk_register
+  - recommendation
+  kind: integration

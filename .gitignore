@@ -3,3 +3,5 @@ __pycache__/
 runs/
 .env
 .superpowers/
+data/
+eval_runs/
