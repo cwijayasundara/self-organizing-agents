@@ -43,3 +43,23 @@ def spec(id, deps=(), kind="work", title=None, required=True):
         required=required,
         kind=kind,
     )
+
+
+def claimed_with_artifact(ledger, task_id, agent, family):
+    """Create task_id if missing, claim it, commit a 300-char artifact, return the Artifact."""
+    if not ledger.db.read("SELECT 1 FROM tasks WHERE id=?", (task_id,)):
+        ledger.tasks.create_task(spec(task_id))
+    ledger.tasks.claim(task_id, agent, family)
+    return ledger.artifacts.commit(task_id, agent, "x" * 300)
+
+
+def approve_through_review(ledger, task_id):
+    """Drive task_id to done: work as P01/deepseek, review-approve as P03/anthropic."""
+    t = ledger.tasks.get(task_id)
+    if t.status != "claimed":
+        ledger.tasks.claim(task_id, "P01", "deepseek")
+        t = ledger.tasks.get(task_id)
+    art = ledger.artifacts.commit(task_id, t.owner, "y" * 300)
+    review = ledger.tasks.submit_for_review(task_id, t.owner, art.id)
+    ledger.tasks.claim(review.id, "P03", "anthropic")
+    return ledger.tasks.record_verdict(review.id, "P03", True, "looks good")

@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Callable
+from typing import Callable, Sequence
 
+from agora.ledger.artifacts import artifact_from_row
 from agora.ledger.board import Board
 from agora.ledger.db import Database
 from agora.ledger.types import ClaimRejected, LedgerError, Task, TaskSpec, TaskStatus
+from agora.validators import Validator
 
 # A task is blocked while any dependency is not done.
 _DEPS_DONE = (
@@ -21,7 +23,13 @@ def _title_key(title: str) -> str:
 
 
 class TaskLedger:
-    def __init__(self, db: Database, board: Board, clock: Callable[[], float], lease_s: int):
+    def __init__(
+        self, db: Database, board: Board, clock: Callable[[], float], lease_s: int,
+        validators: Sequence[Validator] = (),
+        reviewer_family_must_differ: bool = True,
+    ):
+        self.validators = tuple(validators)
+        self.reviewer_family_must_differ = reviewer_family_must_differ
         self.db = db
         self.board = board
         self.clock = clock
@@ -63,15 +71,27 @@ class TaskLedger:
         return self._from_rows(rows)
 
     def claimable(self, agent_id: str, family: str) -> list[Task]:
+        if self.held_by(agent_id):
+            return []
         rows = self.db.read(f"SELECT * FROM tasks WHERE status='open' AND {_DEPS_DONE} ORDER BY rowid")
         return [t for t in self._from_rows(rows) if self._review_claim_rejection(t, agent_id, family) is None]
 
     # ---- extension point for Task 8 ---------------------------------------
     def _review_claim_rejection(self, task: Task, agent_id: str, family: str) -> str | None:
-        """Review-task rules ("same family as author", "own work"); None means allowed.
+        """Review-task rules ("own work", "same family as author"); None means allowed.
 
-        Task 8 implements this; it is shared by claim() and claimable().
+        Shared by claim() and claimable().
         """
+        if task.kind != "review":
+            return None
+        author = None
+        if task.review_of is not None:
+            rows = self.db.read("SELECT owner FROM tasks WHERE id=?", (task.review_of,))
+            author = rows[0]["owner"] if rows else None
+        if author is not None and agent_id == author:
+            return "own work"
+        if self.reviewer_family_must_differ and family == task.author_family:
+            return "same family as author"
         return None
 
     # ---- writes ------------------------------------------------------------
@@ -169,8 +189,11 @@ class TaskLedger:
             )
         if cur.rowcount == 0:
             raise LedgerError("not owner")
-        self.board.write_note("ledger", "OBSERVED", f"RELEASED {task_id} by {agent_id}: {reason}"[:100],
-                              task_id=task_id)
+        try:
+            self.board.write_note("ledger", "OBSERVED", f"RELEASED {task_id} by {agent_id}: {reason}"[:100],
+                                  task_id=task_id)
+        except LedgerError:
+            pass  # best-effort: the release is already committed
         return self.get(task_id)
 
     def sweep_expired(self) -> list[str]:
@@ -188,5 +211,59 @@ class TaskLedger:
                 expired.append((r["id"], r["owner"]))
         # Notes are written after the transaction: write() is not re-entrant.
         for task_id, owner in expired:
-            self.board.write_note("ledger", "OBSERVED", f"LEASE_EXPIRED {task_id} owner={owner}", task_id=task_id)
+            try:
+                self.board.write_note("ledger", "OBSERVED", f"LEASE_EXPIRED {task_id} owner={owner}",
+                                      task_id=task_id)
+            except LedgerError:
+                pass  # best-effort: the expiry is already committed
         return [t for t, _ in expired]
+
+    # ---- review gate -------------------------------------------------------
+    def submit_for_review(self, task_id: str, agent_id: str, artifact_id: str) -> Task:
+        """Move the work task to in_review and return the newly created review task."""
+        work = self._require_owner(task_id, agent_id)
+        with self.db.write() as c:
+            if not c.execute("SELECT 1 FROM artifacts WHERE id=? AND task_id=?",
+                             (artifact_id, task_id)).fetchone():
+                raise LedgerError(f"artifact {artifact_id} does not belong to task {task_id}")
+            n = c.execute("SELECT COUNT(*)+1 AS n FROM tasks WHERE review_of=?", (task_id,)).fetchone()["n"]
+            review_id = f"review:{task_id}:{n}"
+            self._insert(c, TaskSpec(
+                id=review_id, title=f"Review {task_id}" + (f" (round {n})" if n > 1 else ""),
+                objective=f"Review the submitted artifact for work task {task_id} ({work.title}) "
+                          "against its acceptance criteria; approve or reject with reasons.",
+                output_format="Verdict: approve or reject, with reasons.",
+                acceptance=list(work.acceptance), deps=[], required=False, kind="review",
+            ))
+            c.execute("UPDATE tasks SET review_of=?, author_family=?, artifact_id=? WHERE id=?",
+                      (task_id, work.owner_family, artifact_id, review_id))
+            c.execute("UPDATE tasks SET status='in_review', artifact_id=?, version=version+1 WHERE id=?",
+                      (artifact_id, task_id))
+        return self.get(review_id)
+
+    def record_verdict(self, review_task_id: str, reviewer_id: str, approve: bool, reasons: str) -> Task:
+        review = self._require_owner(review_task_id, reviewer_id)
+        if review.kind != "review" or review.review_of is None:
+            raise LedgerError(f"{review_task_id} is not a review task")
+        work = self.get(review.review_of)
+        rows = self.db.read("SELECT * FROM artifacts WHERE id=?", (review.artifact_id,))
+        if not rows:
+            raise LedgerError("review task has no artifact")
+        artifact = artifact_from_row(rows[0])
+        errors = [e for v in self.validators for e in v(work, artifact)]
+        passed = approve and not errors
+        with self.db.write() as c:
+            cur = c.execute(
+                "UPDATE tasks SET status='done', version=version+1 "
+                "WHERE id=? AND owner=? AND status='claimed'", (review_task_id, reviewer_id))
+            if cur.rowcount == 0:
+                raise LedgerError("not owner")
+            if passed:
+                c.execute("UPDATE tasks SET status='done', version=version+1 WHERE id=?", (work.id,))
+            else:
+                c.execute("UPDATE tasks SET status='claimed', lease_until=?, version=version+1 WHERE id=?",
+                          (self.clock() + self.lease_s, work.id))
+        detail = reasons if not errors else "; ".join(errors) + ((" | " + reasons) if reasons else "")
+        text = f"{'APPROVE' if passed else 'REJECT'} {work.id}: {detail}"[:300]
+        self.board.write_note(reviewer_id, "REVIEW", text, task_id=work.id)
+        return self.get(work.id)

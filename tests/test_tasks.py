@@ -150,3 +150,27 @@ def test_create_task_errors(ledger):
     with pytest.raises(LedgerError, match="unknown dep"):
         ledger.tasks.create_task(spec("B", deps=["missing"]))
     assert [t.id for t in ledger.tasks.list()] == ["A"]
+
+
+def test_claimable_empty_when_agent_holds_task(ledger):
+    ledger.tasks.create_task(spec("A")); ledger.tasks.create_task(spec("B"))
+    ledger.tasks.claim("A", "P01", "deepseek")
+    assert ledger.tasks.claimable("P01", "deepseek") == []
+    assert [t.id for t in ledger.tasks.claimable("P02", "deepseek")] == ["B"]
+
+
+def test_same_agent_concurrent_claims_single_winner(ledger):
+    for i in range(10):
+        ledger.tasks.create_task(spec(f"T{i}"))
+
+    def attempt(i):
+        try:
+            ledger.tasks.claim(f"T{i % 10}", "P01", "deepseek")
+            return True
+        except ClaimRejected:
+            return False
+
+    with ThreadPoolExecutor(20) as ex:
+        results = list(ex.map(attempt, range(20)))
+    assert results.count(True) == 1
+    assert len(ledger.tasks.held_by("P01")) == 1

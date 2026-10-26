@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from agora.config import ModelSpec  # typing only
+from agora.ledger.artifacts import ArtifactStore
 from agora.ledger.board import Board
 from agora.ledger.db import Database
 from agora.ledger.tasks import TaskLedger
@@ -30,9 +31,10 @@ def open_ledger(
     prices: dict[str, ModelSpec] | None = None,
     reviewer_family_must_differ: bool = True,
 ) -> Ledger:
-    # Tasks 8-9 wire in artifacts/mail/budget and use the extra parameters.
+    # Task 9 wires in mail/budget and uses `prices`.
     db = Database(path)
     board = Board(db, clock, on_task_note=None)
-    tasks = TaskLedger(db, board, clock, lease_s)
+    tasks = TaskLedger(db, board, clock, lease_s, validators, reviewer_family_must_differ)
     board.on_task_note = tasks.renew_if_owner
-    return Ledger(db=db, clock=clock, board=board, tasks=tasks)
+    artifacts = ArtifactStore(db, tasks, clock)
+    return Ledger(db=db, clock=clock, board=board, tasks=tasks, artifacts=artifacts)
