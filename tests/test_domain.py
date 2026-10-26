@@ -167,3 +167,38 @@ def test_pathological_and_garbage_input_is_fast_and_never_raises(data_dir):
         assert isinstance(dossier_summary_block()(_task("dossier"), _art(text)), list)
         assert isinstance(fact_citation_admission(data_dir)("P", "FACT", "t", text), list)
     assert time.time() - t0 < 1.0
+
+
+def test_huge_int_accepted_and_inf_rejected_without_raising():
+    big = "9" * 400
+    body = json.dumps(_summary()).replace('"arith_mismatch_eur": 1200', '"arith_mismatch_eur": ' + big)
+    assert parse_dossier_summary("DOSSIER_SUMMARY\n```json\n" + body + "\n```")["arith_mismatch_eur"] == int(big)
+    assert dossier_summary_block()(_task("dossier"), _art("DOSSIER_SUMMARY\n```json\n" + body + "\n```")) == []
+    inf = json.dumps(_summary()).replace('"arith_mismatch_eur": 1200', '"arith_mismatch_eur": 1e999')
+    assert parse_dossier_summary("DOSSIER_SUMMARY\n```json\n" + inf + "\n```") is None
+
+
+def test_bare_json_object_accepted():
+    s = _summary()
+    assert parse_dossier_summary("DOSSIER_SUMMARY\n\n" + json.dumps(s)) == s
+    assert parse_dossier_summary("DOSSIER_SUMMARY\n" + json.dumps(s, indent=2) + "\n\nThanks, done.") == s
+    assert parse_dossier_summary("DOSSIER_SUMMARY\n{not json\nmore") is None
+
+
+def test_bare_then_later_fenced_last_valid_wins():
+    a, b = _summary(blocker_country="AA"), _summary(blocker_country="BB")
+    text = "DOSSIER_SUMMARY\n" + json.dumps(a) + "\n\n" + _block(b)
+    assert parse_dossier_summary(text)["blocker_country"] == "BB"
+
+
+def test_fence_info_string_case_and_spaces():
+    s = _summary()
+    for fence in ("```JSON", "``` json", "```json  ", "```"):
+        assert parse_dossier_summary(_block(s, fence)) == s
+
+
+def test_truncated_block_does_not_swallow_later_valid_one():
+    s = _summary()
+    truncated = 'DOSSIER_SUMMARY\n```json\n{"recommendation": "ent\n```\n'
+    assert parse_dossier_summary(truncated + "\n" + _block(s)) == s
+    assert parse_dossier_summary('DOSSIER_SUMMARY\n```json\n{"recommendation": "ent\n\n' + _block(s)) == s

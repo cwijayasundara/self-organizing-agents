@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+from bisect import bisect_right
 
 from agora.config import ConfigError
 from agora.ledger.board import Admission
@@ -81,13 +82,37 @@ def _valid_summary(obj: object) -> bool:
     if obj["recommendation"] not in ("enter", "hold"):
         return False
     n = obj["arith_mismatch_eur"]
-    return isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n)
+    if isinstance(n, bool):
+        return False
+    if isinstance(n, int):
+        return True  # arbitrary-size ints are finite; never hand them to math.isfinite
+    return isinstance(n, float) and math.isfinite(n)
+
+
+_FENCE_OPEN = re.compile(r"```\s*(?:json)?\s*", re.IGNORECASE)
+_MAX_PARSE_ATTEMPTS = 200  # bounds total work on adversarial inputs
 
 
 def parse_dossier_summary(text: str) -> dict | None:
-    lines = text.splitlines()
+    try:
+        return _parse_dossier_summary(text)
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        return None
+
+
+def _parse_dossier_summary(text: str) -> dict | None:
+    lines = text.split("\n")
+    n = len(lines)
+    offsets = []
+    pos = 0
+    for ln in lines:
+        offsets.append(pos)
+        pos += len(ln) + 1
+    closers = [idx for idx, ln in enumerate(lines) if ln.strip() == "```"]
+    decoder = json.JSONDecoder()
     found: dict | None = None
-    i, n = 0, len(lines)
+    attempts = 0
+    i = 0
     while i < n:
         if lines[i].strip() != "DOSSIER_SUMMARY":
             i += 1
@@ -95,21 +120,40 @@ def parse_dossier_summary(text: str) -> dict | None:
         j = i + 1
         while j < n and not lines[j].strip():
             j += 1
-        if j >= n or lines[j].strip() not in ("```json", "```"):
-            i += 1
-            continue
-        k = j + 1
-        while k < n and lines[k].strip() != "```":
-            k += 1
-        if k >= n:
-            break  # unclosed fence: no later block can close either
-        try:
-            obj = json.loads("\n".join(lines[j + 1:k]))
-        except Exception:  # bad JSON, recursion limits, etc.
-            obj = None
+        if j >= n:
+            break
+        first = lines[j].strip()
+        obj: object = None
+        nxt = i + 1  # on failure restart right after the marker
+        if _FENCE_OPEN.fullmatch(first):
+            c = bisect_right(closers, j)
+            if c >= len(closers):
+                i += 1
+                continue  # unclosed fence here; a later marker may still be bare or closed
+            k = closers[c]
+            attempts += 1
+            if attempts > _MAX_PARSE_ATTEMPTS:
+                break
+            try:
+                obj = json.loads("\n".join(lines[j + 1:k]))
+            except (ValueError, RecursionError):
+                obj = None
+            if _valid_summary(obj):
+                nxt = k + 1
+        elif first.startswith("{"):
+            attempts += 1
+            if attempts > _MAX_PARSE_ATTEMPTS:
+                break
+            start = offsets[j] + (len(lines[j]) - len(lines[j].lstrip()))
+            try:
+                obj, _ = decoder.raw_decode(text, start)
+            except (ValueError, RecursionError):
+                obj = None
+            if _valid_summary(obj):
+                nxt = j + 1
         if _valid_summary(obj):
-            found = obj
-        i = k + 1
+            found = obj  # type: ignore[assignment]
+        i = nxt
     return found
 
 
