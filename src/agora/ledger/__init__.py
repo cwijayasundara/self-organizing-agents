@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from agora.config import ModelSpec  # typing only
+from agora.ledger.board import Board
 from agora.ledger.db import Database
 
 
@@ -28,5 +29,6 @@ def open_ledger(
     prices: dict[str, ModelSpec] | None = None,
     reviewer_family_must_differ: bool = True,
 ) -> Ledger:
-    # Tasks 6-9 wire in board/tasks/artifacts/mail/budget and use the extra parameters.
-    return Ledger(db=Database(path), clock=clock)
+    # Tasks 7-9 wire in tasks/artifacts/mail/budget and use the extra parameters.
+    db = Database(path)
+    return Ledger(db=db, clock=clock, board=Board(db, clock, on_task_note=None))
