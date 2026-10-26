@@ -116,3 +116,35 @@ def test_toy_rosters_load():
     tasks = load_template("examples/toy_dossier/template.yaml")
     assert [t.id for t in tasks] == ["competitors", "pricing", "summary"]
     assert all(len(t.acceptance) == 3 for t in tasks)
+
+
+@pytest.mark.parametrize("argv", [["run", "--roster", "x"], ["bogus"], ["run", "--nope"], []])
+def test_usage_errors_return_1(argv, capsys):
+    assert cli.main(argv) == 1
+    assert capsys.readouterr().err.startswith("error:")
+
+
+def test_help_returns_0(capsys):
+    assert cli.main(["--help"]) == 0
+
+
+def test_existing_ledger_rejected_before_models(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli, "build_model", lambda spec: calls.append(spec) or ScriptedChatModel())
+
+    async def fake_run(self):
+        return RunResult("done", 0, 0, DoneStatus(True, []), {}, [])
+
+    monkeypatch.setattr(cli.SwarmRunner, "run", fake_run)
+    args = write(tmp_path)
+    assert cli.main(args) == 0
+    n = len(calls)
+    capsys.readouterr()
+    assert cli.main(args) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ledger") and "already exists" in err
+    assert len(calls) == n
+
+
+def test_default_run_ids_differ():
+    assert cli._default_run_id() != cli._default_run_id()
