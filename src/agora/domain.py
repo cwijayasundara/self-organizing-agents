@@ -40,6 +40,11 @@ def _resolves(data_dir: str, cited: str) -> bool:
         return False
 
 
+def resolve_citation(data_dir: str, path: str) -> bool:
+    """Public wrapper: does the cited relative path resolve to a file under data_dir?"""
+    return _resolves(data_dir, path)
+
+
 def citations_resolve(data_dir: str, min_citations: int = 1) -> Validator:
     def check(task: Task, artifact: Artifact) -> list[str]:
         if task.kind not in ("work", "integration"):

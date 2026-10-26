@@ -13,7 +13,7 @@ class PlantedFact:
     def found_in(self, text: str) -> bool:
         """True iff one single line holds every substring of some detector group."""
         for line in text.lower().split("\n"):
-            if line.strip() and any(all(sub in line for sub in g) for g in self.detectors):
+            if line.strip() and any(g and all(g) and all(sub in line for sub in g) for g in self.detectors):
                 return True
         return False
 
