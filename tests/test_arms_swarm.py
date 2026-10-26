@@ -46,10 +46,12 @@ def test_roster_sizes_and_families(tmp_path):
 def test_ten_peer_roster_matches_example_yaml():
     ex = load_roster(EXAMPLE)
     r = build_swarm_roster(10, ex.models, ex.budget, ex.data_dir)
-    assert [(p.model, p.lens) for p in r.peers] == [(p.model, p.lens) for p in ex.peers] or \
-        sorted((p.model, p.lens) for p in r.peers) == sorted((p.model, p.lens) for p in ex.peers)
-    raw = yaml.safe_load(open(EXAMPLE))
-    assert {(p["model"], p["lens"]) for p in raw["peers"]} == {(p.model, p.lens) for p in r.peers}
+    assert sorted((p.model, p.lens) for p in r.peers) == sorted((p.model, p.lens) for p in ex.peers)
+
+
+def test_roster_alternates_families_starting_with_deepseek(tmp_path):
+    r = build_swarm_roster(7, _specs(), _bs(), str(tmp_path))
+    assert [p.model for p in r.peers] == ["deepseek", "glm"] * 3 + ["deepseek"]
 
 
 def test_same_family_flag_sets_policy(tmp_path):
@@ -152,6 +154,24 @@ async def test_final_text_prefers_dossier_artifact(tmp_path, monkeypatch):
     _patch(monkeypatch, _fake_outcome(tmp_path, {"dossier": "FINAL", "a": "A text"}))
     out = await _run(tmp_path)
     assert out.final_text == "FINAL"
+    assert out.notes["final_source"] == "dossier"
+
+
+async def test_final_source_variants(tmp_path, monkeypatch):
+    o = _fake_outcome(tmp_path, {"a": "A"}, other=["dossier"])
+    with o.ledger.db.write() as c:
+        c.execute("INSERT INTO artifacts (id, task_id, author, version, content, created_at) "
+                  "VALUES ('dossier@v1','dossier','P01',1,'DRAFT',1.0)")
+    _patch(monkeypatch, o)
+    out = await _run(tmp_path)
+    assert out.final_text == "DRAFT" and out.notes["final_source"] == "dossier_unaccepted"
+    o2 = _fake_outcome(tmp_path / "s", {"a": "A"}) if (tmp_path / "s").mkdir() is None else None
+    _patch(monkeypatch, o2)
+    assert (await _run(tmp_path, "o2.sqlite")).notes["final_source"] == "sections"
+    (tmp_path / "e").mkdir()
+    _patch(monkeypatch, _fake_outcome(tmp_path / "e", {}, other=["c"]))
+    out = await _run(tmp_path, "o3.sqlite")
+    assert out.final_text == "" and out.notes["final_source"] == "empty"
 
 
 async def test_final_text_joins_done_tasks_without_dossier(tmp_path, monkeypatch):
@@ -200,3 +220,47 @@ async def test_gold_never_passed(tmp_path, monkeypatch):
     assert seen["roster"].data_dir == str(tmp_path)
     assert seen["db_path"] == str(tmp_path / "o.sqlite")
     assert set(seen["kw"]) == {"models", "validators", "admission", "runner_kwargs"}
+
+
+async def test_grace_defaults_to_zero_and_override_passes(tmp_path, monkeypatch):
+    seen = []
+    real = _fake_outcome(tmp_path, {"a": "A"})
+
+    async def fake(roster, specs, brief, db_path, **kw):
+        seen.append(kw["runner_kwargs"])
+        return real if len(seen) == 1 else _fake_outcome(tmp_path / "second", {"a": "A"})
+
+    monkeypatch.setattr(swarm_mod, "arun_swarm", fake)
+    (tmp_path / "second").mkdir()
+    out = await _run(tmp_path)
+    assert seen[0] == {"grace_s": 0.0} and out.notes["grace_s"] == 0.0
+    await run_swarm_arm("swarm", 5, False, _models_pairs(), "Brief.", TEMPLATE, str(tmp_path),
+                        ArmBudget(usd=1.0, wall_clock_s=10), str(tmp_path / "p.sqlite"), 0, 0,
+                        runner_kwargs={"grace_s": 0.1})
+    assert seen[1] == {"grace_s": 0.1}
+
+
+async def test_fractional_wall_clock_rejected(tmp_path):
+    with pytest.raises(ValueError, match="whole number"):
+        await run_swarm_arm("swarm", 5, False, _models_pairs(), "b", TEMPLATE, str(tmp_path),
+                            ArmBudget(usd=1.0, wall_clock_s=0.5), str(tmp_path / "f.sqlite"), 0, 0)
+
+
+async def test_spend_is_metered_and_models_detached(tmp_path, monkeypatch):
+    from langchain_core.messages import AIMessage
+    pairs = _models_pairs()
+    real = _fake_outcome(tmp_path, {"a": "A"})
+
+    async def fake(roster, specs, brief, db_path, *, models, **kw):
+        m = models["deepseek"]
+        m.script.append(AIMessage("x", usage_metadata={"input_tokens": 1000, "output_tokens": 500,
+                                                       "total_tokens": 1500}))
+        await m.ainvoke("hi")
+        return real
+
+    monkeypatch.setattr(swarm_mod, "arun_swarm", fake)
+    out = await run_swarm_arm("swarm", 5, False, pairs, "b", TEMPLATE, str(tmp_path),
+                              ArmBudget(usd=1.0, wall_clock_s=10), str(tmp_path / "m.sqlite"), 0, 0)
+    assert out.spend_usd == out.notes["metered_usd"] > 0
+    assert out.notes["metered_usd"] >= out.notes["ledger_usd"] - 1e-9
+    assert not pairs["deepseek"][1].callbacks
