@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import sys
 from dataclasses import asdict
@@ -10,14 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from langgraph.checkpoint.memory import InMemorySaver
 
 from agora.config import ConfigError, load_roster
-from agora.ledger import open_ledger
+from agora.api import run_swarm
 from agora.ledger.types import LedgerError
-from agora.models import build_model
-from agora.peer import make_peer
-from agora.runner import SwarmRunner
 from agora.templates import load_template, seed_tasks
 from agora.validators import non_empty
 
@@ -60,34 +55,15 @@ def _run(args: argparse.Namespace) -> int:
         raise ConfigError(f"ledger {db_path} already exists (choose another --run-id or --db)")
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    models = {}
-    for key in dict.fromkeys(p.model for p in roster.peers):  # only models that peers use
-        models[key] = build_model(roster.models[key])
-
-    ledger = open_ledger(
-        db_path,
-        lease_s=roster.budget.lease_s,
-        prices=roster.models,
-        reviewer_family_must_differ=roster.review_policy.reviewer_family_must_differ,
-        validators=[non_empty()],
-    )
-    seed_tasks(ledger, specs)
-    checkpointer = InMemorySaver()
-    peers = {
-        p.id: make_peer(
-            p, roster.models[p.model], models[p.model], ledger, roster.budget,
-            len(roster.peers), brief, checkpointer, data_dir=roster.data_dir,
-        )
-        for p in roster.peers
-    }
-    result = asyncio.run(SwarmRunner(roster, ledger, peers).run())
-
-    print(json.dumps({"run_id": run_id, "db": db_path, **asdict(result)}, indent=2, sort_keys=True))
-    print()
+    outcome = run_swarm(roster, specs, brief, db_path, validators=[non_empty()])
+    result, ledger = outcome.result, outcome.ledger
+    tasks = []
     for t in ledger.tasks.list():
-        if t.required:
-            art = ledger.artifacts.latest(t.id)
-            print(f"{t.id}\t{t.status}\t{art.id if art else '-'}")
+        art = ledger.artifacts.latest(t.id)
+        tasks.append({"id": t.id, "kind": t.kind, "required": t.required,
+                      "status": t.status, "artifact_id": art.id if art else None})
+    print(json.dumps({"run_id": run_id, "db": db_path, **asdict(result), "tasks": tasks},
+                     indent=2, sort_keys=True))
     return EXIT_CODES[result.status]
 
 

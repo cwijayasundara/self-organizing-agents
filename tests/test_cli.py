@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from agora import cli
+from agora import api, cli
 from agora.config import load_roster
 from agora.runner import RunResult
 from agora.done import DoneStatus
@@ -44,25 +44,35 @@ def write(tmp_path, wall=2):
 
 def test_cli_offline(tmp_path, monkeypatch, capsys):
     built = []
-    monkeypatch.setattr(cli, "build_model", lambda spec: built.append(spec.key) or ScriptedChatModel())
+    monkeypatch.setattr(api, "build_model", lambda spec: built.append(spec.key) or ScriptedChatModel())
     code = cli.main(write(tmp_path))
-    out = capsys.readouterr().out
+    out = json.loads(capsys.readouterr().out)
     assert code == 3
-    assert json.loads(out.split("\n\n")[0])["status"] == "timeout"
-    assert "summary" in out
+    assert out["status"] == "timeout"
+    assert out["run_id"] == "t1" and out["db"].endswith("x.sqlite")
+    assert isinstance(out["tasks"], list) and out["tasks"]
+    for t in out["tasks"]:
+        assert set(t) == {"id", "kind", "required", "status", "artifact_id"}
+    assert [t["id"] for t in out["tasks"]] == ["summary"]
     assert sorted(built) == ["a", "b"]  # the unused model is never built
+
+
+def test_cli_stdout_is_pure_json(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(api, "build_model", lambda spec: ScriptedChatModel())
+    cli.main(write(tmp_path))
+    assert json.loads(capsys.readouterr().out)["status"] == "timeout"
 
 
 @pytest.mark.parametrize("status,code", [("done", 0), ("budget", 2), ("timeout", 3), ("stalled", 4)])
 def test_exit_codes(tmp_path, monkeypatch, capsys, status, code):
-    monkeypatch.setattr(cli, "build_model", lambda spec: ScriptedChatModel())
+    monkeypatch.setattr(api, "build_model", lambda spec: ScriptedChatModel())
 
     async def fake_run(self):
         return RunResult(status, 0.5, 1.0, DoneStatus(status == "done", []), {"A01": 1}, [])
 
-    monkeypatch.setattr(cli.SwarmRunner, "run", fake_run)
+    monkeypatch.setattr(api.SwarmRunner, "run", fake_run)
     assert cli.main(write(tmp_path)) == code
-    assert json.loads(capsys.readouterr().out.split("\n\n")[0])["status"] == status
+    assert json.loads(capsys.readouterr().out)["status"] == status
 
 
 def test_config_error(tmp_path, capsys):
@@ -96,12 +106,12 @@ def test_missing_api_key(tmp_path, monkeypatch, capsys):
 def test_key_value_not_leaked(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FIREWORKS_API_KEY", "sk-secret-123")
     monkeypatch.setenv("OPENAI_API_KEY", "")
-    monkeypatch.setattr(cli, "build_model", lambda spec: ScriptedChatModel())
+    monkeypatch.setattr(api, "build_model", lambda spec: ScriptedChatModel())
 
     async def fake_run(self):
         return RunResult("done", 0, 0, DoneStatus(True, []), {}, [])
 
-    monkeypatch.setattr(cli.SwarmRunner, "run", fake_run)
+    monkeypatch.setattr(api.SwarmRunner, "run", fake_run)
     cli.main(write(tmp_path))
     cap = capsys.readouterr()
     assert "sk-secret-123" not in cap.out + cap.err
@@ -130,12 +140,12 @@ def test_help_returns_0(capsys):
 
 def test_existing_ledger_rejected_before_models(tmp_path, monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(cli, "build_model", lambda spec: calls.append(spec) or ScriptedChatModel())
+    monkeypatch.setattr(api, "build_model", lambda spec: calls.append(spec) or ScriptedChatModel())
 
     async def fake_run(self):
         return RunResult("done", 0, 0, DoneStatus(True, []), {}, [])
 
-    monkeypatch.setattr(cli.SwarmRunner, "run", fake_run)
+    monkeypatch.setattr(api.SwarmRunner, "run", fake_run)
     args = write(tmp_path)
     assert cli.main(args) == 0
     n = len(calls)
@@ -152,21 +162,21 @@ def test_default_run_ids_differ():
 
 def test_cli_wires_non_empty_validator_and_prints_exhausted(tmp_path, monkeypatch, capsys):
     seen = {}
-    real = cli.open_ledger
+    real = api.open_ledger
 
     def spy(*a, **kw):
         seen.update(kw)
         return real(*a, **kw)
 
-    monkeypatch.setattr(cli, "open_ledger", spy)
-    monkeypatch.setattr(cli, "build_model", lambda spec: ScriptedChatModel())
+    monkeypatch.setattr(api, "open_ledger", spy)
+    monkeypatch.setattr(api, "build_model", lambda spec: ScriptedChatModel())
 
     async def fake_run(self):
         return RunResult("done", 0, 0, DoneStatus(True, []), {}, [], ["A01"])
 
-    monkeypatch.setattr(cli.SwarmRunner, "run", fake_run)
+    monkeypatch.setattr(api.SwarmRunner, "run", fake_run)
     assert cli.main(write(tmp_path)) == 0
-    assert json.loads(capsys.readouterr().out.split("\n\n")[0])["exhausted"] == ["A01"]
+    assert json.loads(capsys.readouterr().out)["exhausted"] == ["A01"]
     from agora.ledger.types import Artifact, Task
     (v,) = seen["validators"]
     art = Artifact(id="x@v1", task_id="x", author="A01", version=1, content="short", created_at=0.0)
