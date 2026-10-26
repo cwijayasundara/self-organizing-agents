@@ -5,6 +5,7 @@ import os
 import random
 from pathlib import Path
 
+from agora.dataroom import documents
 from agora.dataroom.models import GoldKey
 
 COUNTRIES = ["Germany", "France", "Netherlands", "Spain", "Poland"]
@@ -92,10 +93,10 @@ def _hiring(rng: random.Random, delta: int) -> tuple[str, str]:
             _csv("country,total_eur_per_year", totals))
 
 
-def _readme() -> str:
+def _readme(extra: list[tuple[str, str]]) -> str:
     lines = ["# Lumen Analytics EU market-entry data room", "",
              "Files in this data room:", ""]
-    lines += [f"- `{n}`: {d}" for n, d in README_LINES]
+    lines += [f"- `{n}`: {d}" for n, d in [*README_LINES, *extra]]
     return "\n".join(lines) + "\n"
 
 
@@ -120,18 +121,29 @@ def generate_dataroom(variant: int, out_dir: str, gold_path: str) -> GoldKey:
     _refuse_gold_in_room(out, gold_file)
     gold_file.parent.mkdir(parents=True, exist_ok=True)
     _refuse_gold_in_room(out, gold_file)
-    _write(out, "crm_pipeline.csv", _crm(rng, anomaly))
-    _write(out, "cost_structure.csv", _costs(rng))
+    crm_text, cost_text = _crm(rng, anomaly), _costs(rng)
+    _write(out, "crm_pipeline.csv", crm_text)
+    _write(out, "cost_structure.csv", cost_text)
     _write(out, "competitor_prices.md", _prices(rng, undercutter))
     _write(out, "hiring_costs_by_country.csv", by_country)
     _write(out, "hiring_costs_summary.csv", summary)
-    _write(out, "README.md", _readme())
+    blocker = COUNTRIES[(variant * 2) % 5]
+    crm = documents.parse_csv(crm_text)
+    docs = {**documents.interview_files(variant, crm),
+            **documents.memo_files(variant, COUNTRIES, blocker)}
+    for name in sorted(docs):
+        (out / name).parent.mkdir(parents=True, exist_ok=True)
+        _write(out, name, docs[name])
+    _write(out, "README.md", _readme(documents.document_index(COUNTRIES)))
+    stem = f"interview_{documents.misleading_number(variant):02d}"
     gold = GoldKey(
         variant=variant, countries=list(COUNTRIES),
-        blocker_country=COUNTRIES[(variant * 2) % 5], anomaly_segment=anomaly,
+        blocker_country=blocker, anomaly_segment=anomaly,
         undercutting_competitor=undercutter, mismatch_delta_eur=float(delta),
-        mismatch_files=list(HIRING_FILES), misleading_interview="",
-        country_order=[], planted=[],
+        mismatch_files=list(HIRING_FILES), misleading_interview=stem,
+        country_order=documents.country_order(
+            crm, documents.parse_csv(cost_text), COUNTRIES, blocker),
+        planted=documents.planted_facts(blocker, anomaly, undercutter, delta, stem),
     )
     gold_file.write_bytes(gold.to_json().encode("utf-8"))
     return gold

@@ -140,5 +140,97 @@ def test_no_gold_words_in_dataroom(tmp_path):
         for p in out.rglob("*"):
             if p.is_file():
                 text = p.read_text(encoding="utf-8").lower()
-                for word in ("undercut", "planted", "gold"):
+                for word in ("undercut", "planted", "gold", "blocker",
+                          "mismatch", "answer", "anomal"):
                     assert word not in text, (p.name, word)
+
+
+PHRASE = "we would pay 40% more"
+LEAK_WORDS = ("undercut", "planted", "gold", "blocker", "mismatch", "answer", "anomal")
+NEW_VARIANTS = [*range(10), 100]
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_twenty_interviews_one_misleading(tmp_path, variant):
+    gold, out, _ = _gen(tmp_path, variant)
+    files = sorted((out / "interviews").glob("interview_*.md"))
+    assert [f.name for f in files] == [f"interview_{i:02d}.md" for i in range(1, 21)]
+    crm = {r["account_id"]: r for r in _rows(out / "crm_pipeline.csv")}
+    hits = [f for f in files if PHRASE in f.read_text(encoding="utf-8")]
+    assert len(hits) == 1
+    assert hits[0].stem == gold.misleading_interview
+    assert gold.misleading_interview == f"interview_{(variant * 7) % 20 + 1:02d}"
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        ids = re.findall(r"A\d{4}", text)
+        assert len(ids) == 1 and ids[0] in crm, f.name
+        if f in hits:
+            assert crm[ids[0]]["stage"] == "customer" and crm[ids[0]]["churned"] == "1"
+        else:
+            assert "40%" not in text
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_only_blocker_memo_has_blocker_phrase(tmp_path, variant):
+    gold, out, _ = _gen(tmp_path, variant)
+    for c in COUNTRIES:
+        text = (out / "regulatory" / f"{c}.md").read_text(encoding="utf-8")
+        low = text.lower()
+        if c == gold.blocker_country:
+            assert "licence" in low and "18 months" in low
+        else:
+            assert "18 months" not in low
+        for w in ("blocker", "planted", "gold", "answer"):
+            assert w not in low, (c, w)
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_gold_has_five_planted_facts_with_lowercase_detectors(tmp_path, variant):
+    gold, _, _ = _gen(tmp_path, variant)
+    assert [p.id for p in gold.planted] == [
+        "reg_blocker", "churn_anomaly", "undercut", "arith_mismatch", "misleading_quote"]
+    for p in gold.planted:
+        assert p.description and p.detectors
+        for group in p.detectors:
+            for s in group:
+                assert s == s.lower()
+    by_id = {p.id: p.detectors for p in gold.planted}
+    b = gold.blocker_country.lower()
+    assert by_id["reg_blocker"] == [[b, "licen"], [b, "block"]]
+    assert by_id["churn_anomaly"] == [[gold.anomaly_segment.lower(), "churn"]]
+    comp = gold.undercutting_competitor.lower()
+    assert by_id["undercut"] == [[comp, "undercut"], [comp, "cheaper"],
+                                 [comp, "lower price"], [comp, "below"]]
+    d = int(gold.mismatch_delta_eur)
+    assert by_id["arith_mismatch"][-2:] == [["hiring", str(d)], ["hiring", f"{d:,}"]]
+    assert by_id["arith_mismatch"][:3] == [["hiring", "inconsisten"],
+                                           ["hiring", "mismatch"], ["hiring", "discrepan"]]
+    s = gold.misleading_interview
+    assert by_id["misleading_quote"] == [[s, "contradict"], [s, "misleading"],
+                                         [s, "inconsisten"], [s, "outlier"]]
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_country_order_blocker_last_and_complete(tmp_path, variant):
+    gold, out, _ = _gen(tmp_path, variant)
+    order = gold.country_order
+    assert sorted(order) == sorted(COUNTRIES)
+    assert order[-1] == gold.blocker_country
+    crm = _rows(out / "crm_pipeline.csv")
+    cost = {r["item"]: float(r["eur_per_year"]) for r in _rows(out / "cost_structure.csv")}
+    ratio = {c: sum(r["country"] == c and r["stage"] in ("lead", "qualified") for r in crm)
+             / cost[f"entry_cost_{c}"] for c in COUNTRIES}
+    rest = order[:-1]
+    assert all(ratio[a] >= ratio[b] for a, b in zip(rest, rest[1:]))
+
+
+@pytest.mark.parametrize("variant", NEW_VARIANTS)
+def test_no_planted_answer_in_dataroom_text(tmp_path, variant):
+    gold, out, _ = _gen(tmp_path, variant)
+    for p in out.rglob("*"):
+        if p.is_file():
+            text = p.read_text(encoding="utf-8").lower()
+            for w in LEAK_WORDS:
+                assert w not in text, (p.name, w)
+    memo = (out / "regulatory" / f"{gold.blocker_country}.md").read_text(encoding="utf-8")
+    assert "blocker" not in memo.lower() and "planted" not in memo.lower()
