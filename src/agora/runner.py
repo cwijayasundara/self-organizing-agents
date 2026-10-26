@@ -57,6 +57,7 @@ class SwarmRunner:
         self._started = {pid: False for pid in self.ids}
         self._nudge = {pid: False for pid in self.ids}
         self._nudged = {pid: False for pid in self.ids}  # a NUDGE was delivered and no note has followed
+        self._backoff: set[str] = set()  # peers currently inside a failure back-off sleep
         self._noop_streak = {pid: 0 for pid in self.ids}
         self._warnings: dict[str, list[str]] = {pid: [] for pid in self.ids}
         self._mid: set[str] = set()
@@ -151,7 +152,11 @@ class SwarmRunner:
                 if self._failures[pid] >= MAX_FAILURES:
                     self._retire(pid)
                     return
-                await self.sleep(min(5 * self._failures[pid], 60))
+                self._backoff.add(pid)
+                try:
+                    await self.sleep(min(5 * self._failures[pid], 60))
+                finally:
+                    self._backoff.discard(pid)
                 continue
             self._failures[pid] = 0
             wrote_note = self.ledger.board.last_note_id(pid) != before
@@ -227,7 +232,7 @@ class SwarmRunner:
         """Every live peer is between episodes or has been repeatedly no-op."""
         return all(
             pid in self.retired
-            or (pid not in self._mid and not self._failures[pid])  # a failing peer is in back-off, not idle
+            or (pid not in self._mid and pid not in self._backoff)
             or self._noop_streak[pid] >= 2
             for pid in self.ids
         )

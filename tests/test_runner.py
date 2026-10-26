@@ -297,7 +297,7 @@ async def test_noop_peers_stall_instead_of_spinning(ledger):
     res = await runner.run()
     assert res.status == "stalled" and res.elapsed_s < 10000
     for pid in ("P01", "P02"):
-        assert res.episodes[pid] < 40
+        assert res.episodes[pid] < 10
         assert sum(NUDGE in t for t in fakes[pid].inputs) <= 1
 
 
@@ -333,3 +333,18 @@ async def test_done_during_grace_wins_over_timeout(ledger):
     holder["rc"] = rc
     res = await runner.run()
     assert res.done.done and res.status == "done"
+
+
+async def test_failed_then_idle_peer_does_not_block_stall(ledger):
+    ledger.tasks.create_task(spec("A"))
+    ledger.tasks.claim("A", "P01", "deepseek")
+    ledger.mail.send("P01", "P02", "one dm", urgent=False)
+    roster = make_roster([("P01", "deepseek"), ("P02", "haiku")], stall_after_s=20, wall_clock_s=5000)
+
+    def boom(peer, text, n):
+        raise RuntimeError("x")
+
+    runner, fakes, _ = build(ledger, roster, {"P02": boom})
+    res = await runner.run()
+    assert res.status == "stalled" and res.elapsed_s < 1000
+    assert res.episodes["P01"] < 20 and res.episodes["P02"] == 1
