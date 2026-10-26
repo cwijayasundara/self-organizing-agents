@@ -31,6 +31,493 @@ Evidence labels used throughout: **[code: file:line]** source at `main`; **[test
 
 ---
 
+## Visual guide (ASCII diagrams)
+
+This section explains the whole system with pictures. Every diagram is plain text, so it renders in any viewer, diff and terminal. The numbered sections that follow give the full detail and the evidence for each picture. Numbers in diagrams come from the code or from the n = 1 pilot (`eval_runs/pilot/`); read pilot numbers with that caveat.
+
+| # | Diagram | Answers |
+|---|---|---|
+| V1 | Two topologies | What is different about a supervisor-free team? |
+| V2 | System layers | What runs where? |
+| V3 | The ledger | Where does coordination state live? |
+| V4 | Task state machine | What states can a task be in, and what moves it? |
+| V5 | One deliverable, end to end | How does work get claimed, reviewed and accepted? |
+| V6 | The atomic claim | What happens when two peers want the same task? |
+| V7 | The review gate | Why can no model accept work alone? |
+| V8 | Anatomy of one peer | What is inside a peer? |
+| V9 | Episode loop | How does the runner drive a peer? |
+| V10 | Stop conditions | Who decides the run is over? |
+| V11 | Who decides what | Which supervisor duties moved into code? |
+| V12 | Trust boundary | How is one peer's text kept from attacking another? |
+| V13 | Evaluation harness | How are the arms compared fairly? |
+| V14 | EU task graph | What is the work in the pilot? |
+| V15 | Pilot timeline | What happened in the one live swarm run? |
+| V16 | Pilot cost | What did each arm cost? |
+
+### V1. Two topologies
+
+```
+ ORCHESTRATOR-WORKER (supervisor arm)           PEERS (agora swarm)
+
+            +------------+                      +----+   +----+   +----+
+            | SUPERVISOR |  holds the plan      | P01|   | P02|   | P03|
+            |   (model)  |  assigns, merges,    +-+--+   +-+--+   +-+--+
+            +--+--+--+---+  decides "done"        |        |        |
+     task()   /   |   \                           |  read / write / claim
+             /    |    \                          v        v        v
+        +---+  +---+  +---+               +----------------------------------+
+        | W |  | W |  | W |               |   SHARED LEDGER (SQLite, code)   |
+        +---+  +---+  +---+               |   tasks | notes | artifacts      |
+   workers talk only to the supervisor      |   mail  | spend                  |
+   results pass through its context         +----------------------------------+
+                                                     ^
+   a model is the coordinator                        |  start / bound / stop
+                                                +----+-----+
+                                                |  RUNNER  |  deterministic
+                                                |  (code)  |  Python, no model
+                                                +----------+
+                                            no model is the coordinator
+```
+
+### V2. System layers
+
+```
++------------------------------------------------------------------------------+
+|  ONE PYTHON PROCESS, ONE ASYNCIO EVENT LOOP                                  |
+|                                                                              |
+|  agora CLI / run_swarm()          cli.py, api.py                             |
+|          |                                                                   |
+|          v                                                                   |
+|  +--------------------------------------------------------------+            |
+|  | SwarmRunner (deterministic)                runner.py         |            |
+|  | stagger | episodes | nudges | warnings | retire | sweep | stop|            |
+|  +-------------------------------+------------------------------+            |
+|                                  | ainvoke(episode)                          |
+|                                  v                                           |
+|  +--------------------------------------------------------------+            |
+|  | PEERS  P01 .. P10  (deepagents graphs, up to 10)             |            |
+|  |  each wrapped in middleware: Hide | TurnStart | Notice | Budget          |
+|  +-------------------------------+------------------------------+            |
+|                                  | 14 ledger tools (tools.py)                |
+|                                  v                                           |
+|  +--------------------------------------------------------------+            |
+|  | LEDGER  Board | Tasks | Artifacts | Mailbox | Budget          |            |
+|  |         one SQLite connection, WAL, RLock, BEGIN IMMEDIATE   |            |
+|  |         validators + admission checks run inside it          |            |
+|  +--------------------------------------------------------------+            |
++--------------------+---------------------------------+-----------------------+
+                     |                                 |
+                     v                                 v
+          /data/ read-only mount            Fireworks / Anthropic / OpenAI
+          (writes denied)                   model APIs
+```
+
+### V3. The ledger: five stores in one database
+
+```
+                           SQLite file  (runs/<run-id>.sqlite)
+  +--------------------------------------------------------------------------+
+  |                                                                          |
+  |  BOARD (notes)            TASKS (+ task_deps)        ARTIFACTS           |
+  |  append-only, typed       open -> claimed ->         immutable versions  |
+  |  FACT      cap 100        in_review -> done          T@v1, T@v2, ...     |
+  |  OBSERVED  cap 100        dependency-gated           owner re-checked    |
+  |  FAIL      cap 100        atomic leased claim        inside the txn      |
+  |  CLAIM     cap 100        review gate                                    |
+  |  DECISION  cap 200                                                       |
+  |  PATCH_SUMMARY 300        MAILBOX (+ deliveries)     BUDGET (spend)      |
+  |  REVIEW        300        DM or broadcast            one row per model   |
+  |  DISSENT       300        urgent flag                call, tiered and    |
+  |  supersede, delta         exactly-once per           cache-aware price   |
+  |  cursor per agent         recipient (PK)                                 |
+  |                                                                          |
+  |  cursors: per-agent "last note I was shown"                              |
+  +--------------------------------------------------------------------------+
+         every write = one BEGIN IMMEDIATE ... COMMIT while holding the lock
+         => all writes are serialized; every read sees committed state only
+```
+
+### V4. Task state machine
+
+```
+   seed / create_task / reserve
+              |
+              v
+         +---------+
+         |  OPEN   |<-------------------------------------------+
+         +----+----+                                             |
+              |                                                  |
+              | claim()  one UPDATE; needs: status open,         | release() by owner
+              |          all deps done, claimer holds no         | lease expired (sweep)
+              |          other claimed task                      | runner retires or
+              v                                                  | exhausts the owner
+         +---------+                                             |
+   +---->| CLAIMED |---------------------------------------------+
+   |     +----+----+
+   |          |
+   |          | submit_for_review()  owner only, own artifact,
+   |          | not a review task, ledger not closed
+   |          v
+   |     +-----------+
+   |     | IN_REVIEW |   no lease here, so the sweeper never touches it
+   |     +-----+-----+
+   |           |
+   |           | record_verdict()   guard: status in_review AND same artifact_id
+   |           |
+   |   +-------+---------------------------+
+   |   |                                   |
+   |   | reject, or any validator error    | approve AND zero validator errors
+   |   |                                   v
+   +---+  (back to the author,         +---------+
+          fresh lease)                 |  DONE   |
+                                       +---------+
+
+   Review tasks take a shorter road:  OPEN -> CLAIMED -> DONE
+   (the reviewer's record_verdict closes the review task itself).
+```
+
+### V5. One deliverable, end to end
+
+```
+ AUTHOR P01 (deepseek)               LEDGER                    REVIEWER P06 (glm)
+ ---------------------               ------                    ------------------
+ claim_task(T) ----------------->  OPEN -> CLAIMED
+                                   lease = now + 1200 s
+ board_write(FACT/CLAIM,T) ---->   note stored, lease renewed
+ commit_artifact(T, text) ---->    T@v1 stored (owner re-checked)
+ board_write(PATCH_SUMMARY) -->    needs evidence=<source>, not "tbd"
+ submit_for_review(T) -------->    T: CLAIMED -> IN_REVIEW
+                                   creates review:T:1
+                                   (author_family = deepseek)
+                                                 |
+                                                 |   review:T:1 is claimable
+                                                 |   only by a different agent
+                                                 v   AND a different family
+                                   <---------------- claim_task(review:T:1)
+                                   <---------------- read_artifact -> T@v1
+                                   validators run on (T, T@v1)
+                                   <---------------- review_verdict(approve|reject)
+                                                 |
+                       +-------------------------+--------------------------+
+                       |                                                    |
+          approve and 0 validator errors                      reject or validator error
+                       |                                                    |
+                  T -> DONE                              T -> CLAIMED (P01 revises)
+                       |                                                    |
+          evaluate_done() sees T                          P01 commits T@v2, resubmits
+```
+
+### V6. The atomic claim: two peers, one task
+
+```
+   P03 calls claim_task(X)                   P04 calls claim_task(X)
+          |                                          |
+          +---------------------+--------------------+
+                                |
+                                v
+                    +-------------------------+
+                    |  RLock: one at a time   |
+                    +------------+------------+
+                                 |
+        first in:                |                   second in:
+  UPDATE tasks SET status='claimed', owner=P03       same UPDATE, but now
+  WHERE id=X AND status='open'                       status is 'claimed'
+    AND all deps done                                -> 0 rows match
+    AND P03 holds no claimed task                    -> ClaimRejected
+  RETURNING id  -> 1 row                                   |
+          |                                                v
+          v                                    "ERROR: not open"  (a string,
+   "OK claimed X"                              not a crash; the model just
+                                               picks other work)
+
+   Other rejection texts: unknown task | deps not done | already holding a task
+                          own work | same family as author   (review tasks)
+```
+
+### V7. The review gate: the only road to DONE
+
+```
+              review_verdict(review_task, approve?, reasons)
+                                 |
+                  +--------------+--------------+
+                  |                             |
+                  v                             v
+        reviewer is not the author?     run EVERY validator on the artifact
+        reviewer is another family?     (a validator that raises = an error)
+        (checked at claim time)                  |
+                                                 v
+                              passed = approve AND (no validator errors)
+                                                 |
+                       one transaction, both guarded by the same artifact_id
+                                                 |
+                     +---------------------------+---------------------------+
+                     |                                                       |
+               passed = true                                          passed = false
+          work task -> DONE                                  work task -> CLAIMED (author)
+                     |                                                       |
+                     +----------------+--------------------------------------+
+                                      v
+                          REVIEW note: "APPROVE|REJECT T: errors | reasons"
+
+   No other code path writes status='done' for a work or integration task.
+   A model's "looks good" is never enough: validators have a veto.
+```
+
+### V8. Anatomy of one peer
+
+```
+  Input each episode:  "Begin. Follow your protocol."  or  "Continue."  (+ mail/nudge)
+                                       |
+                                       v
+  +------------------------------------------------------------------------+
+  | MIDDLEWARE (outer to inner)                                            |
+  |  1 TodoList        planning list                                       |
+  |  2 HideTools       removes the `task` tool, blocks calls to it         |
+  |  3 TurnStartDelta  appends ONE message: snapshot of shared state       |
+  |  4 PeerNotice      appends urgent DMs and new FAIL/CLAIM to tool result|
+  |  5 Budget          charges each call; ends the episode at peer cap     |
+  |  6 Summarization   optional, only if max_prompt_tokens is set          |
+  +--------------------------------+---------------------------------------+
+                                   v
+  +------------------------------------------------------------------------+
+  | MODEL (Fireworks / Anthropic / OpenAI)                                 |
+  |   system prompt = protocol, rendered once, never changes               |
+  |   history = this peer's own thread across all its episodes             |
+  +--------------------------------+---------------------------------------+
+                                   | tool calls
+              +--------------------+---------------------+
+              v                                          v
+   14 LEDGER TOOLS (closures over the         FILESYSTEM  /data/**  read-only
+   caller's id: authorship cannot be          ls | read_file | grep
+   spoofed)                                   (write denied by permission)
+   board_read board_write board_grep
+   board_unfold list_tasks claim_task
+   renew_task release_task create_task
+   commit_artifact read_artifact send_dm
+   submit_for_review review_verdict
+
+   Prefix-cache rule: nothing earlier in the conversation is ever edited.
+   New state is only APPENDED (a new message, or text on a new tool result).
+```
+
+### V9. The episode loop the runner drives for each peer
+
+```
+        peer i starts after sleeping  i * stagger_s  (default 12 s)
+                                |
+                                v
+                +-------------------------------+
+        +------>| has work?                     |
+        |       |  holds a task                 |
+        |       |  or something claimable       |
+        |       |  or non-urgent mail           |
+        |       |  or a nudge / warning queued  |
+        |       +---------------+---------------+
+        |                no     |     yes
+        |        +--------------+-------------+
+        |        v                            v
+        |   sleep idle_poll_s (15 s)    run ONE EPISODE: ainvoke(...)
+        |   (idle peers cost nothing)    limit 100 graph steps, 900 s timeout
+        |                                     |
+        |            +------------+-----------+------------+-------------+
+        |            v            v                        v             v
+        |        normal end   recursion limit         error / timeout   peer budget
+        |        (wrote       = normal end            failure count +1  exhausted
+        |         notes?)                             back-off 5 s * n  -> stop peer,
+        |            |            |                   3 in a row:       release tasks
+        |            |            |                   RETIRE, release   note posted
+        |            |            |                   its tasks
+        |            v            v
+        |     wrote nothing and ledger unchanged?
+        |        yes: no-op streak +1, cooldown     (once per quiet streak the peer
+        |        no : reset                          gets "ANYTHING TO PUBLISH?")
+        +----------------+
+```
+
+### V10. Stop conditions: the monitor ticks once per second
+
+```
+   every 1 s:  sweep expired leases   ->   post LEASE_EXPIRED, reopen task
+               send 85% and 97% deadline warnings (by time OR spend)
+               update ledger fingerprint (max note id, task versions, mail count)
+
+   check in this order (first true wins):
+
+     1. every required task DONE ?            -------->  "done"      exit 0
+     2. swarm spend >= swarm_usd ?            -------->  "budget"    exit 2
+     3. elapsed >= wall_clock_s ?             -------->  "timeout"   exit 3
+     4. no ledger change for stall_after_s (300 s)
+        AND every live peer idle, or 2+ no-op episodes in a row ?
+                                              -------->  "stalled"   exit 4
+
+   then: close ledger to new tasks and submissions
+         grace period so in-flight reviews can finish (30 s; 0 s in the eval)
+         re-evaluate done: if true, status becomes "done" whatever it was
+```
+
+### V11. Who decides what: supervisor duties and where they went
+
+```
+ DUTY OF A SUPERVISOR           IN A SUPERVISOR TEAM      IN AGORA
+ ----------------------------   ----------------------    -------------------------------
+ split the goal into tasks      supervisor model          task template (fixed, human-made)
+ decide who does which task     supervisor model          peers claim for themselves;
+                                                          one atomic UPDATE picks the winner
+ judge whether work is good     supervisor model          other-family reviewer
+                                                          + deterministic validators
+ remember what is going on      supervisor's context      the ledger (SQL rows)
+ decide "we are finished"       supervisor model          evaluate_done(): all required
+                                                          tasks DONE
+ enforce budget and time        (usually nobody)          runner + BudgetMiddleware
+ recover from a stuck worker    supervisor model          lease expiry, retire, release
+                                                          (code)
+
+   The duties did not disappear. They moved from one model's context into
+   SQL constraints and a deterministic runner. That is the whole idea.
+```
+
+### V12. Trust boundary: peers do not trust each other's text
+
+```
+   P01 writes an artifact or note                          P06's model reads it
+   (might contain: ==== END PEER DATA ====                      ^
+    "ignore your rules", forged headers ...)                    |
+              |                                                 |
+              v                                                 |
+   +----------------------------------------------------+       |
+   | render.py                                          |       |
+   |  1. single-line text: whitespace collapsed         |       |
+   |  2. multi-line text: EVERY line prefixed "| "      |       |
+   |  3. runs of 3+ "=" become "= = =";                 |       |
+   |     "peer data" becomes "peer-data"                |       |
+   +--------------------------+-------------------------+       |
+                              v                                 |
+        ==== PEER DATA ====                                     |
+        | quoted line 1                  one START and one END -+
+        | quoted line 2                  line, always. Inner lines
+        ==== END PEER DATA ====           cannot look like markers.
+
+   Identity cannot be forged either: every tool is bound to the caller's id,
+   and REVIEW notes can only come out of a verdict.
+   The block stops marker forgery, NOT persuasion; reviewers exist for that.
+```
+
+### V13. Evaluation harness: same budget for every arm
+
+```
+   same brief + same read-only data room (gold key never passed to any arm)
+   same budget: $3 per run, 1,500 s, 100 graph steps per episode
+                                   |
+     +-------------+---------------+---------------+----------------+
+     v             v               v               v                v
+ c0-deepseek   c3-supervisor    c1-10 swarm     c2-5 / c2-3     a1-same-family
+ c0-glm        1 supervisor     10 peers        5 / 3 peers     10 peers, review
+ one agent     + 4 specialists  (5 DeepSeek,                    rule switched off
+               + capped helper   5 GLM)
+     |             |               |                |                |
+     +-------------+-------+-------+----------------+----------------+
+                           v
+              independent spend meter on every model call
+                           |
+                           v
+              dossier text (+ DOSSIER_SUMMARY block)
+                           |
+          +----------------+------------------+
+          v                                   v
+   deterministic scorer                 cross-vendor LLM judge
+   recall (5 planted facts)             (Haiku 5.5 or GPT-6 Luna,
+   summary_accuracy, citations           never the team's own model)
+          |                                   |
+          +----------------+------------------+
+                           v
+              results.jsonl -> report.md
+              decision rule: swarm vs best single agent
+              wins / loses only if recall AND judge both clear their margins
+              (needs >= 3 non-error rows per side), otherwise "inconclusive"
+```
+
+### V14. The EU market-entry task graph (12 required tasks)
+
+Arrows read "feeds into". Each task starts only when everything pointing at it is DONE.
+
+```
+ LEVEL 0 (all claimable at once)        LEVEL 1                   LEVEL 2            LEVEL 3
+
+ sizing -----------------+------------> country_sequence -+
+ regulatory --------+----+                                 |
+ ops_cost ----------+----+---+                             |
+                    |        |                             |
+ sizing ------------+--------+---------> pnl_3yr ----------+---> recommendation --+
+ pricing -----------+--------+              (also needs     |                      |
+ gtm ---------------+--------+              pricing, gtm,   |                      |
+ ops_cost ----------+--------+              ops_cost)       |                      |
+                                                            |                      |
+ regulatory --------+                                       |                      |
+ competitors -------+------------------> risk_register -----+                      |
+ customer_evidence -+                                                              |
+                                                                                   v
+ all ten other tasks (every one of the above) ---------------------------------> dossier
+                                                                       (integration task;
+                                                                        DONE = run is done)
+```
+
+```
+ Dependencies, spelled out:
+   country_sequence  <- sizing, regulatory, ops_cost
+   pnl_3yr           <- sizing, pricing, gtm, ops_cost
+   risk_register     <- regulatory, competitors, customer_evidence
+   recommendation    <- country_sequence, pnl_3yr, risk_register
+   dossier           <- all ten other tasks
+
+ Longest chain:  sizing -> country_sequence -> recommendation -> dossier
+ Every task also spawns review:<task>:<round> tasks when submitted. The graph
+ stays a DAG for the whole run (new tasks may depend only on existing ones),
+ so dependency deadlock cannot happen.
+```
+
+### V15. Pilot timeline: the one live swarm run (n = 1)
+
+`=` is an artifact version from commit to approval. `x` is a version that was rejected. One column is 10 seconds; the run took 759 s.
+
+```
+                0         100       200       300       400       500       600       700  (s)
+                |.........|.........|.........|.........|.........|.........|.........|.........
+ops_cost    P01 |  xxxxxx    ===
+regulatory  P01 |     =====
+competitors P04 |       ====
+cust_evid   P05 |          =====
+gtm         P01 |           xxxxxxxxxxxxxxxxx    ==
+pricing     P03 |               xxxxxx  =======
+risk_reg    P07 |                  =======
+sizing      P02 |                                ===
+country_seq P01 |                                    ===
+pnl_3yr     P05 |                                        ====
+recommend   P01 |                                              xxxx  xxxxxxxx =====
+dossier     P03 |                                                                     xxx  =
+```
+
+```
+   Reading it: the long chain on the right (recommendation, then dossier) is the
+   critical path. Cross-family review rejected 6 of 18 rounds; every rejection
+   I could check pointed at a real defect. No lease expired, nobody was retired.
+```
+
+### V16. Pilot cost (n = 1 per arm, one dossier each)
+
+```
+   spend in USD, one # is about $0.025
+
+   single agent  c0-deepseek   |########                              $0.205
+   supervisor    c3-supervisor |###############                       $0.379
+   10-peer swarm c1-10         |########################################## $1.053
+
+   swarm / single = 5.1x     swarm / supervisor = 2.8x
+   All three scored 5 of 5 on the summary block, so this run cannot show the
+   swarm is better. It only shows what the extra coordination cost in this run.
+```
+
+---
+
 ## 1. Problem statement and terminology
 
 ### 1.1 Two topologies
