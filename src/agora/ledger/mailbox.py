@@ -33,8 +33,8 @@ class Mailbox:
             mid = cur.lastrowid
         return Message(mid, sender, recipient, text, urgent, now)
 
-    def take(self, agent_id: str, urgent_only: bool) -> list[Message]:
-        """Return and mark delivered this agent's pending messages, oldest first."""
+    def _pending_query(self, agent_id: str, urgent: bool | None) -> tuple[str, list]:
+        """SQL + params for this agent's undelivered messages; `urgent` None means any."""
         broadcast_ok = agent_id in self._audience
         sql = (
             "SELECT m.* FROM messages m WHERE NOT EXISTS ("
@@ -42,9 +42,20 @@ class Mailbox:
             " AND (m.recipient=? OR (m.recipient IS NULL AND ? AND m.sender<>?))"
         )
         params: list = [agent_id, agent_id, int(broadcast_ok), agent_id]
-        if urgent_only:
-            sql += " AND m.urgent=1"
-        sql += " ORDER BY m.id"
+        if urgent is not None:
+            sql += " AND m.urgent=?"
+            params.append(int(urgent))
+        return sql + " ORDER BY m.id", params
+
+    def pending(self, agent_id: str, urgent: bool | None = None) -> int:
+        """Count undelivered messages without consuming them (read-only)."""
+        sql, params = self._pending_query(agent_id, urgent)
+        return len(self.db.read(sql, tuple(params)))
+
+    def take(self, agent_id: str, urgent_only: bool, non_urgent_only: bool = False) -> list[Message]:
+        """Return and mark delivered this agent's pending messages, oldest first."""
+        urgent = True if urgent_only else (False if non_urgent_only else None)
+        sql, params = self._pending_query(agent_id, urgent)
         with self.db.write() as conn:
             rows = conn.execute(sql, params).fetchall()
             conn.executemany(

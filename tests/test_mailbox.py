@@ -67,3 +67,18 @@ def test_concurrent_take_never_duplicates(ledger):
         t.join()
     assert len(results) == 50
     assert len(set(results)) == 50
+
+
+def test_pending_counts_without_consuming(ledger):
+    ledger.mail.register(["P01", "P02"])
+    ledger.mail.send("P01", "P02", "later", urgent=False)
+    ledger.mail.send("P01", None, "now", urgent=True)
+    assert ledger.mail.pending("P02") == 2
+    assert ledger.mail.pending("P02", urgent=True) == 1
+    assert ledger.mail.pending("P02", urgent=False) == 1
+    assert ledger.mail.pending("P01") == 0  # own broadcast is not pending for the sender
+    assert ledger.mail.pending("P02") == 2  # still there: nothing was consumed
+    assert [m.text for m in ledger.mail.take("P02", urgent_only=False, non_urgent_only=True)] == ["later"]
+    assert ledger.mail.pending("P02") == 1
+    assert [m.text for m in ledger.mail.take("P02", urgent_only=False)] == ["now"]
+    assert ledger.mail.pending("P02") == 0
