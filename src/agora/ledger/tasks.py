@@ -226,6 +226,11 @@ class TaskLedger:
             if not c.execute("SELECT 1 FROM artifacts WHERE id=? AND task_id=?",
                              (artifact_id, task_id)).fetchone():
                 raise LedgerError(f"artifact {artifact_id} does not belong to task {task_id}")
+            cur = c.execute(
+                "UPDATE tasks SET status='in_review', artifact_id=?, version=version+1 "
+                "WHERE id=? AND owner=? AND status='claimed'", (artifact_id, task_id, agent_id))
+            if cur.rowcount == 0:
+                raise LedgerError("not owner")
             n = c.execute("SELECT COUNT(*)+1 AS n FROM tasks WHERE review_of=?", (task_id,)).fetchone()["n"]
             review_id = f"review:{task_id}:{n}"
             self._insert(c, TaskSpec(
@@ -237,8 +242,6 @@ class TaskLedger:
             ))
             c.execute("UPDATE tasks SET review_of=?, author_family=?, artifact_id=? WHERE id=?",
                       (task_id, work.owner_family, artifact_id, review_id))
-            c.execute("UPDATE tasks SET status='in_review', artifact_id=?, version=version+1 WHERE id=?",
-                      (artifact_id, task_id))
         return self.get(review_id)
 
     def record_verdict(self, review_task_id: str, reviewer_id: str, approve: bool, reasons: str) -> Task:
@@ -258,11 +261,16 @@ class TaskLedger:
                 "WHERE id=? AND owner=? AND status='claimed'", (review_task_id, reviewer_id))
             if cur.rowcount == 0:
                 raise LedgerError("not owner")
+            guard = "WHERE id=? AND status='in_review' AND artifact_id=?"
             if passed:
-                c.execute("UPDATE tasks SET status='done', version=version+1 WHERE id=?", (work.id,))
+                cur = c.execute(f"UPDATE tasks SET status='done', version=version+1 {guard}",
+                                (work.id, review.artifact_id))
             else:
-                c.execute("UPDATE tasks SET status='claimed', lease_until=?, version=version+1 WHERE id=?",
-                          (self.clock() + self.lease_s, work.id))
+                cur = c.execute(
+                    f"UPDATE tasks SET status='claimed', lease_until=?, version=version+1 {guard}",
+                    (self.clock() + self.lease_s, work.id, review.artifact_id))
+            if cur.rowcount == 0:
+                raise LedgerError("stale review: work task is no longer awaiting this artifact")
         detail = reasons if not errors else "; ".join(errors) + ((" | " + reasons) if reasons else "")
         text = f"{'APPROVE' if passed else 'REJECT'} {work.id}: {detail}"[:300]
         self.board.write_note(reviewer_id, "REVIEW", text, task_id=work.id)

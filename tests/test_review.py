@@ -152,3 +152,51 @@ def test_builtin_validators():
     assert non_empty(10)(task, art) == []
     assert non_empty(100)(task, art)[0].startswith("non_empty:")
     assert t.id == "A"
+
+
+def test_concurrent_submits_create_single_review(ledger):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    ledger.tasks.create_task(spec("A"))
+    ledger.tasks.claim("A", "P01", "deepseek")
+    a1 = ledger.artifacts.commit("A", "P01", "one")
+    a2 = ledger.artifacts.commit("A", "P01", "two")
+    barrier = Barrier(2)
+
+    def submit(art):
+        barrier.wait()
+        try:
+            return ledger.tasks.submit_for_review("A", "P01", art.id)
+        except LedgerError as e:
+            return e
+
+    with ThreadPoolExecutor(2) as ex:
+        results = list(ex.map(submit, [a1, a2]))
+    assert sum(isinstance(r, LedgerError) for r in results) == 1
+    reviews = [t for t in ledger.tasks.list() if t.kind == "review"]
+    assert len(reviews) == 1
+    assert ledger.tasks.get("A").artifact_id == reviews[0].artifact_id
+
+
+def test_stale_review_cannot_reopen_done_task(ledger):
+    a1 = claimed_with_artifact(ledger, "A", "P01", "deepseek")
+    r1 = ledger.tasks.submit_for_review("A", "P01", a1.id)
+    # Construct the stale state directly: a second open review pinned to another artifact.
+    a2_id = "A@v2"
+    with ledger.db.write() as c:
+        c.execute("INSERT INTO artifacts (id, task_id, author, version, content, created_at) "
+                  "VALUES (?,?,?,?,?,?)", (a2_id, "A", "P01", 2, "z" * 300, 0.0))
+        c.execute("INSERT INTO tasks (id, title, title_key, objective, output_format, acceptance, "
+                  "required, kind, review_of, author_family, artifact_id) "
+                  "VALUES ('review:A:2','Review A 2','review a 2','o','f','[]',0,'review','A','deepseek',?)",
+                  (a2_id,))
+    ledger.tasks.claim(r1.id, "P03", "anthropic")
+    ledger.tasks.claim("review:A:2", "P04", "anthropic")
+    assert ledger.tasks.record_verdict(r1.id, "P03", True, "ok").status == "done"
+    with pytest.raises(LedgerError, match="stale review"):
+        ledger.tasks.record_verdict("review:A:2", "P04", False, "late reject")
+    work = ledger.tasks.get("A")
+    assert work.status == "done" and work.artifact_id == a1.id
+    assert ledger.tasks.get("review:A:2").status == "claimed"  # rolled back, no verdict recorded
+    assert len(_review_notes(ledger)) == 1
