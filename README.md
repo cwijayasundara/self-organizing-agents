@@ -15,10 +15,14 @@ cp .env.example .env   # then fill in your API keys; never commit .env
 .venv/bin/python -m pytest -q
 ```
 
+## Default models
+
+GLM 5.3 Flash and DeepSeek V4.1 Flash are the default pair: cheap, and two model families so cross-family review holds. The full 10-peer roster is `roster.glm-deepseek.yaml`. `roster.example.yaml` is the five-model reference roster (adds MiniMax, Haiku 5.5, GPT-6 Luna) used by the tests.
+
 ## Live run (the toy dossier example)
 
 ```
-uv run --env-file .env agora run --roster examples/toy_dossier/roster.fireworks.yaml --template examples/toy_dossier/template.yaml --brief examples/toy_dossier/brief.md
+uv run --env-file .env agora run --roster examples/toy_dossier/roster.glm-deepseek.yaml --template examples/toy_dossier/template.yaml --brief examples/toy_dossier/brief.md
 ```
 
 Exit codes: 0 = done (all required tasks approved), 1 = configuration or usage error, 2 = swarm budget exhausted, 3 = wall-clock timeout, 4 = stalled (no progress).

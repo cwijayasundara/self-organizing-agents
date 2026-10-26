@@ -173,3 +173,12 @@ def test_cli_wires_non_empty_validator_and_prints_exhausted(tmp_path, monkeypatc
     assert v(None, art) and not v(None, art._replace(content="y" * 300) if hasattr(art, "_replace")
                                   else Artifact(id="x@v1", task_id="x", author="A01", version=1,
                                                 content="y" * 300, created_at=0.0))
+
+
+def test_glm_deepseek_rosters_load():
+    for path, n in (("roster.glm-deepseek.yaml", 10), ("examples/toy_dossier/roster.glm-deepseek.yaml", 3)):
+        r = load_roster(path)
+        assert {p.model for p in r.peers} <= {"deepseek", "glm"}
+        assert set(r.models) == {"deepseek", "glm"}
+        assert len({r.models[p.model].family for p in r.peers}) >= 2
+        assert len(r.peers) == n
