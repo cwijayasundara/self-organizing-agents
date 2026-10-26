@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import sys
 from pathlib import Path
 
@@ -72,14 +73,24 @@ def _run(args) -> int:
         return 0
     if args.max_total_usd is None:
         raise _UsageError("--max-total-usd is required for a live run (use --dry-run to preview cost)")
+    if not math.isfinite(args.max_total_usd):
+        raise _UsageError("--max-total-usd must be a finite number")
     if args.max_total_usd < cfg.budget_usd:
         raise _UsageError(f"--max-total-usd ${args.max_total_usd:.2f} is smaller than one run's "
                           f"budget ${cfg.budget_usd:.2f}")
-    result = asyncio.run(run_eval(cfg, max_total_usd=args.max_total_usd))
     out = Path(cfg.out_dir)
+    interrupted = False
+    result = None
+    try:
+        result = asyncio.run(run_eval(cfg, max_total_usd=args.max_total_usd))
+    except KeyboardInterrupt:
+        interrupted = True
     rows = load_rows(out / "results.jsonl")
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.md").write_text(render_markdown(aggregate(rows), decide(rows)))
+    if interrupted:
+        print(f"interrupted; {len(rows)} runs recorded; report: {out / 'report.md'}", file=sys.stderr)
+        return 130
     print(f"{len(result.rows)} runs recorded; total spend ${result.spent_total_usd:.4f}; "
           f"stopped by cap: {result.stopped_by_cap}; report: {out / 'report.md'}")
     return 5 if result.stopped_by_cap else 0

@@ -151,7 +151,7 @@ def test_fresh_models_and_meter_per_run(cfg):
     n, calls = [], []
     run(cfg, models_factory=factory(n), run_arm_fn=fake_arm(text, calls=calls),
         judges_override=judges(GOOD, GOOD))
-    assert len(n) == 2
+    assert len(n) == 3  # one preflight build + one fresh build per run
     assert calls[0]["meter"] is not calls[1]["meter"]
     assert all(c["meter"].cap_usd == cfg.budget_usd and c["meter"].total_usd == 0 for c in calls)
     assert calls[0]["models"]["glm"][1] is not calls[1]["models"]["glm"][1]
@@ -185,3 +185,92 @@ def test_run_arm_dispatch(cfg, monkeypatch):
         ("swarm", "a1-same-family", 10, True, cfg.template_path)]
     with pytest.raises(ValueError):
         asyncio.run(arms_mod.run_arm("nope", cfg, models, "b", "d", "db", 0, 0, None))
+
+
+def _spending_arm(raise_after=True, tokens=1_000_000):
+    async def fn(arm, cfg, models, brief, data_dir, db_path, variant, seed, meter):
+        spec, model = models["glm"]
+        model.script.append(AIMessage("x", usage_metadata={
+            "input_tokens": tokens, "output_tokens": tokens, "total_tokens": 2 * tokens}))
+        await model.ainvoke("hi")
+        if raise_after:
+            raise RuntimeError("crash after spend")
+        return ArmOutcome(arm, variant, seed, "done", "", 0.0, 1.0, {})
+    return fn
+
+
+def test_unmetered_spend_recorded_on_error_and_success(cfg):
+    gold_text(cfg)
+    res = run(cfg, run_arm_fn=_spending_arm(), judges_override=judges(GOOD, GOOD))
+    assert res.rows[0].status == "error"
+    assert res.rows[0].spend_usd == pytest.approx(0.65) and res.rows[0].notes["acct_usd"] == pytest.approx(0.65)
+    assert res.spent_total_usd == pytest.approx(1.3)
+    ok = run(cfg.model_copy(update={"out_dir": cfg.out_dir + "2"}),
+             run_arm_fn=_spending_arm(raise_after=False), judges_override=judges(GOOD, GOOD))
+    assert ok.rows[0].status == "done" and ok.rows[0].spend_usd == pytest.approx(0.65)
+
+
+def test_stale_ledger_quarantined(cfg):
+    _, text = gold_text(cfg)
+    led = Path(cfg.out_dir) / "ledgers"
+    led.mkdir(parents=True)
+    (led / "c0-deepseek_v0_s0.sqlite").write_text("stale")
+    (led / "c0-deepseek_v0_s0.sqlite-wal").write_text("wal")
+    res = run(cfg, run_arm_fn=fake_arm(text), judges_override=judges(GOOD, GOOD))
+    assert res.rows[0].status == "done" and res.rows[0].notes["stale_ledger"] == "c0-deepseek_v0_s0.crashed-1.sqlite"
+    assert (led / "c0-deepseek_v0_s0.crashed-1.sqlite").read_text() == "stale"
+    assert (led / "c0-deepseek_v0_s0.crashed-1.sqlite-wal").exists()
+
+
+def test_preflight_missing_judge_key_aborts_before_any_arm_call(cfg, monkeypatch):
+    from agora.config import ConfigError
+    for k in ("FIREWORKS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    calls = []
+    with pytest.raises(ConfigError) as e:
+        run(cfg, run_arm_fn=fake_arm("x", calls=calls))
+    assert calls == [] and ("ANTHROPIC_API_KEY" in str(e.value) or "OPENAI_API_KEY" in str(e.value))
+    assert not Path(cfg.out_dir, "results.jsonl").exists()
+
+
+def test_error_rows_retried_on_resume_and_spend_counts(cfg):
+    _, text = gold_text(cfg)
+    res1 = run(cfg, run_arm_fn=_spending_arm(), judges_override=judges(GOOD, GOOD))
+    calls = []
+    res2 = run(cfg, run_arm_fn=fake_arm(text, spend=0.5, calls=calls), judges_override=judges(GOOD, GOOD, GOOD, GOOD))
+    assert len(calls) == 2  # both error rows retried
+    assert len(res2.rows) == 4 and [r.status for r in res2.rows] == ["error", "error", "done", "done"]
+    assert res2.spent_total_usd == pytest.approx(res1.spent_total_usd + 1.0)
+    calls3 = []
+    run(cfg, run_arm_fn=fake_arm(text, calls=calls3), judges_override=judges())
+    assert calls3 == []
+
+
+def test_hung_arm_times_out_into_error_row(cfg):
+    gold_text(cfg)
+
+    async def hang(*a):
+        await asyncio.sleep(30)
+
+    res = run(cfg, run_arm_fn=hang, run_timeout_s=0.05, judges_override=judges())
+    assert [r.status for r in res.rows] == ["error", "error"]
+    assert "TimeoutError" in res.rows[0].notes["error"]
+
+
+def test_scoring_error_still_yields_row(cfg, monkeypatch):
+    _, text = gold_text(cfg)
+    import agora.eval.runner as rn
+
+    def boom(*a):
+        raise RuntimeError("score bug")
+
+    monkeypatch.setattr(rn, "score_dossier", boom)
+    res = run(cfg, run_arm_fn=fake_arm(text, spend=0.7), judges_override=judges())
+    assert res.rows[0].status == "done" and res.rows[0].spend_usd == 0.7
+    assert "scoring_error" in res.rows[0].notes and res.rows[0].recall == 0.0
+
+
+def test_rows_record_budget_in_notes(cfg):
+    _, text = gold_text(cfg)
+    res = run(cfg, run_arm_fn=fake_arm(text), judges_override=judges(GOOD, GOOD))
+    assert res.rows[0].notes["budget_usd"] == cfg.budget_usd and res.rows[0].notes["wall_clock_s"] == 1500

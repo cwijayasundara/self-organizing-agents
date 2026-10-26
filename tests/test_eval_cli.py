@@ -103,3 +103,23 @@ def test_missing_key_exit_1_names_env_var_not_value(tmp_path, monkeypatch, capsy
     assert cli.main(["--config", str(p), "--max-total-usd", "5"]) == 1
     err = capsys.readouterr().err
     assert "FIREWORKS_API_KEY" in err and "sk-secret-value" not in err
+
+
+def test_nonfinite_max_total_rejected(capsys):
+    for v in ("nan", "inf"):
+        assert cli.main(["--config", YAML, "--max-total-usd", v]) == 1
+        assert "finite" in capsys.readouterr().err
+
+
+def test_keyboard_interrupt_writes_report_exit_130(tmp_path, monkeypatch):
+    cfg = yaml.safe_load(Path(YAML).read_text())
+    cfg["out_dir"] = str(tmp_path / "out")
+    p = tmp_path / "e.yaml"
+    p.write_text(yaml.safe_dump(cfg))
+
+    async def fake(c, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "run_eval", fake)
+    assert cli.main(["--config", str(p), "--max-total-usd", "5"]) == 130
+    assert (tmp_path / "out" / "report.md").exists()
