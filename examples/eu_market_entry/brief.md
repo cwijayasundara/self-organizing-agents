@@ -28,6 +28,7 @@ Work like an auditor:
 - Check qualitative claims against measured data.
 - Compare competitor prices with the company's own.
 - Check regulatory timelines for every country.
+- Break measured data down by each dimension it records, and look for groups that behave differently from the rest.
 
 Report any discrepancy, contradiction or risk you find in the evidence, with the files involved and the figures that differ.
 

@@ -82,6 +82,7 @@ def test_template_criteria_are_neutral():
         for text in [t["objective"], *t["acceptance"]]:
             assert not ("hiring_costs_by_country" in text and "hiring_costs_summary" in text), t["id"]
             assert not ("interview" in text and "crm_pipeline" in text), t["id"]
+            assert not ("segment" in text.lower() and "churn" in text.lower()), t["id"]
 
 
 def test_example_citations_resolve(tmp_path):

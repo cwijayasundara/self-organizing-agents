@@ -7,7 +7,7 @@ tasks:
   acceptance:
   - Gives accounts, pipeline stage counts and churn per country, computed from [crm_pipeline.csv] with
     the row range cited.
-  - Reports segment-level metrics (counts, ARR, churn) with citations.
+  - Reports segment-level metrics (counts, ARR) with citations.
   - Shows each calculation (counts, ratios) so a reviewer can recompute it.
   - Cites a data-room file in [file] form for every figure.
   deps: []
