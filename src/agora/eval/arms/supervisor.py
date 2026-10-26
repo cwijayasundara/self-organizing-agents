@@ -5,7 +5,7 @@ import time
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
-from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import ModelCallLimitMiddleware, TodoListMiddleware
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -51,6 +51,12 @@ SUBAGENT_DEFS: list[dict] = [
      "system_prompt": "You are a customer researcher covering customers, pipeline, demand signals and feedback. " + _COMMON},
 ]
 
+GENERAL_PURPOSE = {
+    "name": "general-purpose",
+    "description": "General-purpose helper for any research task.",
+    "system_prompt": "You are a general-purpose research helper. " + _COMMON,
+}
+
 
 async def run_supervisor_arm(arm: str, supervisor_spec: ModelSpec, supervisor_model: BaseChatModel,
                              subagent_models: dict[str, tuple[ModelSpec, BaseChatModel]], brief: str,
@@ -63,6 +69,12 @@ async def run_supervisor_arm(arm: str, supervisor_spec: ModelSpec, supervisor_mo
     missing = sorted({d["model"] for d in SUBAGENT_DEFS} - set(subagent_models))
     if missing:
         raise ValueError(f"subagent_models is missing model keys: {missing}")
+    specs_by_model: dict[int, str] = {}
+    for spec, model in [(supervisor_spec, supervisor_model)] + [subagent_models[k] for k in
+                                                                 sorted({d["model"] for d in SUBAGENT_DEFS})]:
+        if specs_by_model.setdefault(id(model), spec.key) != spec.key:
+            raise ValueError("the same model object is supplied under two different specs "
+                             f"({specs_by_model[id(model)]} and {spec.key})")
     t0 = clock()
     attached: list[BaseChatModel] = []
     pairs = [(supervisor_spec, supervisor_model)] + [subagent_models[d["model"]] for d in SUBAGENT_DEFS]
@@ -72,10 +84,23 @@ async def run_supervisor_arm(arm: str, supervisor_spec: ModelSpec, supervisor_mo
                 attached.append(model)
             meter.attach(model, spec)  # idempotent per meter: a shared model is charged once
         permissions = [FilesystemPermission(operations=["write"], paths=["/data/**"], mode="deny")]
+        # deepagents invokes subagents with their own config (recursion limit 9_999), so the
+        # per-episode step limit is enforced as a model-call cap. A graph step budget of N is
+        # roughly N/2 model-call/tool-call cycles. exit_behavior="end" hands the supervisor a
+        # "Model call limits exceeded" tool result instead of raising.
+        call_limit = max(1, budget.episode_recursion_limit // 2)
+
+        def limit():
+            return [ModelCallLimitMiddleware(run_limit=call_limit, exit_behavior="end")]
+
+        # `permissions` is inherited by subagents anyway; passing it explicitly is redundant but harmless.
+        # An explicit general-purpose spec suppresses deepagents' own uncapped default one.
+        defs = [{**d, "model_obj": subagent_models[d["model"]][1]} for d in SUBAGENT_DEFS]
+        defs.append({**GENERAL_PURPOSE, "model_obj": supervisor_model})
         subagents = [
             {"name": d["name"], "description": d["description"], "system_prompt": d["system_prompt"],
-             "model": subagent_models[d["model"]][1], "permissions": permissions}
-            for d in SUBAGENT_DEFS
+             "model": d["model_obj"], "permissions": permissions, "middleware": limit()}
+            for d in defs
         ]
         agent = create_deep_agent(
             model=supervisor_model,
@@ -102,7 +127,8 @@ async def run_supervisor_arm(arm: str, supervisor_spec: ModelSpec, supervisor_mo
     return ArmOutcome(arm=arm, variant=variant, seed=seed, status=status, final_text=text,
                       spend_usd=meter.total_usd, elapsed_s=clock() - t0,
                       notes={"episodes": episodes, "stop": stop, "model": supervisor_spec.key,
-                             "subagents": [d["name"] for d in SUBAGENT_DEFS],
+                             "subagents": [d["name"] for d in defs],
+                             "subagent_call_limit": call_limit,
                              "subagent_models": {d["name"]: d["model"] for d in SUBAGENT_DEFS},
                              "episode_recursion_limit": budget.episode_recursion_limit,
                              "max_episodes": max_episodes})

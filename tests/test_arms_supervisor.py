@@ -60,7 +60,7 @@ async def test_supervisor_delegates_and_writes_dossier(tmp_path):
     assert out.status == "finished" and out.final_text == DOSSIER
     assert out.notes["stop"] == "final"
     assert out.notes["model"] == DS.key
-    assert out.notes["subagents"] == [d["name"] for d in SUBAGENT_DEFS]
+    assert out.notes["subagents"] == [d["name"] for d in SUBAGENT_DEFS] + ["general-purpose"]
     assert out.notes["subagent_models"]["market-analyst"] == "glm"
     assert any("market findings" in str(m.content) for batch in sup.seen for m in batch)
     assert sub.seen  # the specialist model really ran
@@ -105,6 +105,7 @@ async def test_subagent_cannot_write_data_dir(tmp_path):
     out, _ = await run(sup, subs, tmp_path)
     assert out.status == "finished"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["real.txt"]
+    assert any("permission denied" in str(m.content) for batch in subs["glm"][1].seen for m in batch)
     assert (tmp_path / "real.txt").read_text() == "orig"
 
 
@@ -152,3 +153,52 @@ def test_four_subagents_defined_with_alternating_models():
     for d in SUBAGENT_DEFS:
         assert d["description"].count(".") == 1 and "/data/" in d["system_prompt"]
         assert "[" in d["system_prompt"]
+
+
+def ls_loop(n):
+    return [tool_call("ls", {"path": "/"}) for _ in range(n)]
+
+
+@pytest.mark.parametrize("agent_name", ["market-analyst", "general-purpose"])
+async def test_subagent_call_limit_enforced(tmp_path, agent_name):
+    sup = ScriptedChatModel(script=[delegate(agent_name), write(), AIMessage("w"), AIMessage("FINAL")])
+    sub = ScriptedChatModel(script=ls_loop(40))
+    subs = {"glm": (GLM, sub), "deepseek": (DS, sup)}
+    meter = SpendMeter(1.0)
+    if agent_name == "general-purpose":  # the override runs on the supervisor's model object
+        sup.script[1:1] = ls_loop(40)
+        sub = sup
+    out = await run_supervisor_arm("c0-sup", DS, sup, subs, BRIEF, str(tmp_path),
+                                   ArmBudget(1.0, 1000.0, 10), meter, 1, 7)
+    assert out.notes["subagent_call_limit"] == 5
+    assert out.status == "finished" and out.final_text == DOSSIER
+    seen = [m for b in sup.seen for m in b]
+    assert any("Model call limits exceeded" in str(m.content) for m in seen)
+    if agent_name == "market-analyst":
+        assert len(sub.seen) == 5
+
+
+class DescribingModel(ScriptedChatModel):
+    descriptions: list = []
+
+    def bind_tools(self, tools, **kw):
+        for t in tools:
+            d = t if isinstance(t, dict) else {"name": t.name, "description": t.description}
+            self.descriptions.append(str(d.get("description", d)))
+        return super().bind_tools(tools, **kw)
+
+
+async def test_general_purpose_override_replaces_default(tmp_path):
+    from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
+    sup = DescribingModel(script=[write(), AIMessage("w"), AIMessage("FINAL")], descriptions=[])
+    sub = ScriptedChatModel(script=[])
+    await run(sup, {"glm": (GLM, sub), "deepseek": (DS, sup)}, tmp_path)
+    text = " ".join(sup.descriptions)
+    assert "general-purpose: General-purpose helper for any research task" in text
+    assert GENERAL_PURPOSE_SUBAGENT["description"] not in text
+
+
+async def test_same_model_object_under_two_specs_raises(tmp_path):
+    sup = ScriptedChatModel(script=[])
+    with pytest.raises(ValueError, match="same model object"):
+        await run(sup, {"glm": (GLM, sup), "deepseek": (DS, sup)}, tmp_path)
