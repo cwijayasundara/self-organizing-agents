@@ -31,7 +31,7 @@ def make_peer(
     checkpointer,
     data_dir: str | None = None,
 ) -> CompiledStateGraph:
-    peer_usd = peer.peer_usd or budget.peer_usd
+    peer_usd = peer.peer_usd if peer.peer_usd is not None else budget.peer_usd
     extra: dict = {}
     backend = StateBackend()
     if data_dir is not None:

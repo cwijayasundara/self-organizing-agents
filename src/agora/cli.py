@@ -19,6 +19,7 @@ from agora.models import build_model
 from agora.peer import make_peer
 from agora.runner import SwarmRunner
 from agora.templates import load_template, seed_tasks
+from agora.validators import non_empty
 
 EXIT_CODES = {"done": 0, "budget": 2, "timeout": 3, "stalled": 4}
 
@@ -68,6 +69,7 @@ def _run(args: argparse.Namespace) -> int:
         lease_s=roster.budget.lease_s,
         prices=roster.models,
         reviewer_family_must_differ=roster.review_policy.reviewer_family_must_differ,
+        validators=[non_empty()],
     )
     seed_tasks(ledger, specs)
     checkpointer = InMemorySaver()

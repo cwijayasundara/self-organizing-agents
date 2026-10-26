@@ -160,6 +160,19 @@ class BudgetMiddleware(AgentMiddleware):
             return {"jump_to": "end"}
         return None
 
+    def _before(self) -> dict[str, Any] | None:
+        if self.ledger.budget.peer_exhausted(self.agent_id, self.peer_usd):
+            return {"jump_to": "end"}
+        return None
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state, runtime) -> dict[str, Any] | None:
+        return self._before()
+
+    @hook_config(can_jump_to=["end"])
+    async def abefore_model(self, state, runtime) -> dict[str, Any] | None:
+        return self._before()
+
     @hook_config(can_jump_to=["end"])
     def after_model(self, state, runtime) -> dict[str, Any] | None:
         return self._after(state)

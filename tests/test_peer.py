@@ -167,3 +167,13 @@ async def test_between_episode_notes_in_snapshot_not_in_notices(ledger):
     assert "between episodes failure" in "\n".join(str(m.content) for m in model.seen[-2])
     tool_msg = [m for m in out["messages"] if m.type == "tool"][0]
     assert "between episodes failure" not in tool_msg.content
+
+
+def test_budget_middleware_skips_model_when_exhausted(ledger):
+    from agora.ledger.types import Usage
+    from agora.middleware import BudgetMiddleware
+
+    mw = BudgetMiddleware("P01", "deepseek", ledger, 1.0)
+    assert mw.before_model({"messages": []}, None) is None
+    ledger.budget.charge("P01", "deepseek", Usage(10_000_000, 0, 0))
+    assert mw.before_model({"messages": []}, None) == {"jump_to": "end"}

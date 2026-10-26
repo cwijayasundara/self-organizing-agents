@@ -50,7 +50,7 @@ class FakePeer:
 def make_roster(peers, **budget):
     base = load_roster("roster.example.yaml")
     b = base.budget.model_copy(update={
-        "stagger_s": 0.01, "idle_poll_s": 1, "stuck_turn_s": 1000, "stall_after_s": 300,
+        "stagger_s": 0.01, "peer_usd": 1000, "idle_poll_s": 1, "stuck_turn_s": 1000, "stall_after_s": 300,
         "wall_clock_s": BIG, "swarm_usd": 1000, **budget,
     })
     return base.model_copy(update={
@@ -348,3 +348,34 @@ async def test_failed_then_idle_peer_does_not_block_stall(ledger):
     res = await runner.run()
     assert res.status == "stalled" and res.elapsed_s < 1000
     assert res.episodes["P01"] < 20 and res.episodes["P02"] == 1
+
+
+async def test_exhausted_peer_is_stopped_and_task_released(ledger):
+    ledger.tasks.create_task(spec("A"))
+    roster = make_roster([("P01", "deepseek"), ("P02", "haiku")], peer_usd=1, stall_after_s=30)
+
+    def hog(peer, text, n):
+        if n == 1:
+            ledger.tasks.claim("A", "P01", "deepseek")
+        charge(ledger, peer.pid, 5)
+        ledger.board.write_note(peer.pid, "FACT", f"spent {n}")
+
+    runner, fakes, _ = build(ledger, roster,
+                             {"P01": hog, "P02": lambda p, t, n: (worker(ledger, "anthropic", "A")(p, t, n),
+                                                                   reviewer(ledger, "anthropic")(p, t, n))})
+    res = await runner.run()
+    assert res.exhausted == ["P01"] and res.retired == []
+    assert fakes["P01"].calls == 1  # never invoked again after exhaustion
+    assert ledger.tasks.get("A").owner != "P01"
+    texts = [n.text for n in ledger.board.recent() if n.author == "runner"]
+    assert "PEER_BUDGET_EXHAUSTED P01" in texts
+    assert fakes["P02"].calls >= 1
+
+
+async def test_zero_peer_usd_is_honored(ledger):
+    ledger.tasks.create_task(spec("A"))
+    roster = make_roster([("P01", "deepseek"), ("P02", "haiku")], stall_after_s=30)
+    roster.peers[0] = roster.peers[0].model_copy(update={"peer_usd": 0.0})
+    runner, fakes, _ = build(ledger, roster, {})
+    res = await runner.run()
+    assert res.exhausted == ["P01"] and fakes["P01"].calls == 0

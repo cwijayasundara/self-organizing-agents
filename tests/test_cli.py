@@ -148,3 +148,28 @@ def test_existing_ledger_rejected_before_models(tmp_path, monkeypatch, capsys):
 
 def test_default_run_ids_differ():
     assert cli._default_run_id() != cli._default_run_id()
+
+
+def test_cli_wires_non_empty_validator_and_prints_exhausted(tmp_path, monkeypatch, capsys):
+    seen = {}
+    real = cli.open_ledger
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cli, "open_ledger", spy)
+    monkeypatch.setattr(cli, "build_model", lambda spec: ScriptedChatModel())
+
+    async def fake_run(self):
+        return RunResult("done", 0, 0, DoneStatus(True, []), {}, [], ["A01"])
+
+    monkeypatch.setattr(cli.SwarmRunner, "run", fake_run)
+    assert cli.main(write(tmp_path)) == 0
+    assert json.loads(capsys.readouterr().out.split("\n\n")[0])["exhausted"] == ["A01"]
+    from agora.ledger.types import Artifact, Task
+    (v,) = seen["validators"]
+    art = Artifact(id="x@v1", task_id="x", author="A01", version=1, content="short", created_at=0.0)
+    assert v(None, art) and not v(None, art._replace(content="y" * 300) if hasattr(art, "_replace")
+                                  else Artifact(id="x@v1", task_id="x", author="A01", version=1,
+                                                content="y" * 300, created_at=0.0))

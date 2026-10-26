@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
 
 from langgraph.errors import GraphRecursionError
@@ -36,6 +36,7 @@ class RunResult:
     done: DoneStatus
     episodes: dict[str, int]
     retired: list[str]
+    exhausted: list[str] = field(default_factory=list)
 
 
 class SwarmRunner:
@@ -53,6 +54,7 @@ class SwarmRunner:
         self.ids = [p.id for p in roster.peers]
         self.episodes = {pid: 0 for pid in self.ids}
         self.retired: list[str] = []
+        self.exhausted: list[str] = []
         self._failures = {pid: 0 for pid in self.ids}
         self._started = {pid: False for pid in self.ids}
         self._nudge = {pid: False for pid in self.ids}
@@ -88,6 +90,7 @@ class SwarmRunner:
             done=evaluate_done(self.ledger),
             episodes=dict(self.episodes),
             retired=list(self.retired),
+            exhausted=list(self.exhausted),
         )
 
     # ---- peer loop -----------------------------------------------------------
@@ -121,7 +124,9 @@ class SwarmRunner:
         budget = self.roster.budget
         if index:
             await self.sleep(index * budget.stagger_s)
-        while not self._stopping and pid not in self.retired:
+        while not self._stopping and pid not in self.retired and pid not in self.exhausted:
+            if self._check_exhausted(pid):
+                return
             if not self._has_work(pid):
                 await self.sleep(budget.idle_poll_s)
                 continue
@@ -147,6 +152,8 @@ class SwarmRunner:
             finally:
                 self._mid.discard(pid)
             self.episodes[pid] += 1
+            if self._check_exhausted(pid):
+                return
             if failed:
                 self._failures[pid] += 1
                 if self._failures[pid] >= MAX_FAILURES:
@@ -172,6 +179,28 @@ class SwarmRunner:
                 self._noop_streak[pid] = 0
                 await self.sleep(0)  # always yield between episodes
 
+    def _peer_usd(self, pid: str) -> float:
+        spec = next(p for p in self.roster.peers if p.id == pid)
+        return spec.peer_usd if spec.peer_usd is not None else self.roster.budget.peer_usd
+
+    def _check_exhausted(self, pid: str) -> bool:
+        """A peer at its budget cap is stopped for good: held tasks go back to open, no more episodes."""
+        if pid in self.exhausted:
+            return True
+        if not self.ledger.budget.peer_exhausted(pid, self._peer_usd(pid)):
+            return False
+        self.exhausted.append(pid)
+        for t in self.ledger.tasks.held_by(pid):
+            try:
+                self.ledger.tasks.release(t.id, pid, "peer budget exhausted")
+            except LedgerError:
+                pass
+        try:
+            self.ledger.board.write_note("runner", "OBSERVED", f"PEER_BUDGET_EXHAUSTED {pid}")
+        except LedgerError:
+            pass
+        return True
+
     def _retire(self, pid: str) -> None:
         self.retired.append(pid)
         # in_review tasks are left alone: the ledger does not sweep them.
@@ -196,7 +225,7 @@ class SwarmRunner:
         text = template.format(pct=round(threshold * 100))
         self.ledger.mail.send("runner", None, text, urgent=True)
         for pid in self.ids:
-            if pid not in self.retired:
+            if pid not in self.retired and pid not in self.exhausted:
                 self._warnings[pid].append(text)
 
     async def _monitor(self, start: float) -> str:
@@ -232,6 +261,7 @@ class SwarmRunner:
         """Every live peer is between episodes or has been repeatedly no-op."""
         return all(
             pid in self.retired
+            or pid in self.exhausted
             or (pid not in self._mid and pid not in self._backoff)
             or self._noop_streak[pid] >= 2
             for pid in self.ids
