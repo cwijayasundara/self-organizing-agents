@@ -31,6 +31,31 @@ Exit codes: 0 = done (all required tasks approved), 1 = configuration or usage e
 
 The design report is in `reports/Supervisorless self organizing agents.md`. The record of the first live run is in `docs/phase3-toy-run.md`.
 
-## Known limitations / Plan 2
+## EU market-entry example and evaluation
 
-Optional tasks that peers create and submit during the shutdown grace window can end `in_review` with no reviewer. The Haiku and Luna roster (`examples/toy_dossier/roster.yaml`) has not been verified in a live run. Other review findings are triaged to Plan 2.
+`examples/eu_market_entry/` holds a 10-agent dossier task (brief, 12-task template, roster) over a synthetic data room with planted facts. Generate a data room and its hidden answer key (the key stays outside the room):
+
+```
+python scripts/make_dataroom.py --variant 0 --out data/eu/v0 --gold data/eu_gold/v0.json
+```
+
+`agora run ... --domain eu_market_entry` adds the citation and summary-block checks. The evaluation harness compares seven arms at equal budget (single DeepSeek or GLM agent, supervisor-led team, swarms of 10, 5 and 3, and a same-family-review ablation):
+
+```
+# free preview: lists the runs and the worst-case cost, needs no keys, creates no files
+python -m agora.eval.cli --config examples/eu_market_entry/eval.yaml --dry-run
+
+# live run: keys must be exported in the environment; --max-total-usd is required
+set -a; . ./.env; set +a
+python -m agora.eval.cli --config examples/eu_market_entry/eval.yaml --arms c0-deepseek,c1-10 --max-total-usd 10
+```
+
+Results go to `eval_runs/<name>/` (`results.jsonl`, `texts/`, `ledgers/`, `report.md`). Finished runs are skipped on resume; failed runs are retried; interrupted runs record their spend. Exit codes: 0 finished, 1 usage or config error, 5 stopped by the spend cap, 130 interrupted. The first live pilot is written up in `docs/phase5-eu-pilot.md` ($1.64 for 3 arms; a pipeline check, not a result).
+
+## Known limitations
+
+- The scorer's keyword recall undercounts honest phrasings; `summary_accuracy` and the judge score are the stronger signals. Treat recall as auxiliary.
+- The swarm enforces citation and summary-block validators that the baselines only receive as instructions; baselines stop at 90% of budget or 20 episodes; the supervisor's subagent call limit is per delegation. See the report caveats.
+- One judge model is used per run (rotation by variant and seed); the pre-registered decision rule needs at least 3 rows per side.
+- Optional tasks that peers create during shutdown are refused; any that were already in flight are listed under `unreviewed` in the run result.
+- Luna (GPT-6) is configured as a judge and verified in a one-call check, but no full evaluation arm has used it. The `agora-eval` shortcut is only installed after reinstalling the package (`uv sync`); until then use `python -m agora.eval.cli`.
