@@ -18,6 +18,8 @@ This is a **pipeline check, not a result**. With n = 1 per arm the pre-registere
 | `c1-10` (10-agent swarm) | done (dossier task accepted, all 12 tasks done) | $1.053 | 759 s | 4 of 5 (missed: churn anomaly) | 5 of 5 | 25 of 25 | 4.4 |
 | `c3-supervisor` (supervisor + 4 specialists + general-purpose helper) | finished (2 episodes) | $0.379 | 865 s | 4 of 5 (missed: misleading quote) | 5 of 5 | 23 of 23 | 3.0 |
 
+Note on "5 of 5": the summary-accuracy check compares only the first and last country of the order (plus the other four fields). The supervisor's middle order is wrong (Netherlands before France; gold is Spain, France, Netherlands, Poland, Germany), which this metric does not see. The swarm and the single agent matched the gold order exactly.
+
 Decision rule output: **inconclusive** (needs at least 3 ok rows per side). Judge spend was about $0.0006 per run.
 
 ## Hand check of the two "missed" facts
@@ -25,18 +27,18 @@ Decision rule output: **inconclusive** (needs at least 3 ok rows per side). Judg
 Reading the saved dossiers (`eval_runs/pilot/texts/`, git-ignored) shows both misses are false negatives of the per-line keyword matcher, not missed findings:
 
 - **Swarm, `churn_anomaly`:** the dossier lists "SMB churn concentration" as a risk and names SMB as the anomalous segment in its summary block. It does not put a marker such as "higher" or "4x" on the same line as "SMB" and "churn".
-- **Supervisor, `misleading_quote`:** the dossier flags the lone "+40%" willingness-to-pay statement as coming from a churned account (the planted contradiction), but cites other interview files and never names `interview_01`.
+- **Supervisor, `misleading_quote`:** the dossier flags the lone "+40%" willingness-to-pay statement as coming from a churned account (the planted contradiction), but does not identify `interview_01` as the contradicting source (it appears once, inside a range citation `[interviews/interview_01.md–interviews/interview_20.md]`).
 
-So the keyword recall understates every arm. `summary_accuracy` (exact comparison of the five answers in the summary block) and the judge score are the stronger signals; all three arms scored 5 of 5 on the summary block.
+So the keyword recall understates every arm. `summary_accuracy` (exact comparison of the five answers in the summary block) and the judge score are the stronger signals; all three arms scored 5 of 5 on the summary block (with the coarse country-order check noted above).
 
 ## Observations
 
 - **Cost of coordination:** the swarm cost about 5 times the single agent ($1.05 vs $0.21) and about 2.8 times the supervisor arm for dossiers of similar factual quality on this data room. This is consistent with published findings that decentralized teams carry overhead. One run per arm cannot say whether the quality difference the judge saw (4.4 vs 4.0 vs 3.0) is real.
 - **Swarm health:** all 10 peers ran (episodes per peer 2-9), none retired or exhausted, no errors, no unreviewed optional tasks, `final_source` was the accepted dossier. The validators and cross-family review did their job (the dossier task needed two review rounds).
-- **Spend accounting:** the swarm's ledger figure ($1.025) was about 2.7% below the model-level meter ($1.053); the gap is the calls the ledger does not see (summarization). The meter figure is the one reported.
+- **Spend accounting:** the swarm's ledger figure ($1.025) was about 2.7% below the model-level meter ($1.053); the cause is not established. Summarization is unlikely (the largest prompt was about 109K tokens, below both summarization triggers) and an offline check of a normal episode matched exactly. The meter figure is the one reported.
 - **Limits not binding:** nobody got near $3 or 1500 s, so the budget and wall clock never cut any arm short in this pilot.
 - **Judge and parsing:** the judge returned parseable scores for all three dossiers; no judge failure notes.
-- **Length:** with the equal 700-word limit in the brief, dossiers were 628 (swarm) and 732 (supervisor, about 5% over) words.
+- **Length:** with the equal 700-word limit in the brief, dossiers were 607 (swarm), 652 (single) and 711 (supervisor, about 1.6% over) words without the summary block (628, 673 and 732 including it).
 
 ## Fairness asymmetries that still apply (state these with any result)
 
