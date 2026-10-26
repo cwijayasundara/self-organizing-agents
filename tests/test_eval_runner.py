@@ -114,7 +114,7 @@ def test_empty_dossier_skips_judge(cfg):
     j = judges(GOOD)
     res = run(cfg, run_arm_fn=fake_arm(""), judges_override=j)
     r = res.rows[0]
-    assert r.judge_mean is None and r.judge_id is None and r.notes["judge"] == "empty dossier"
+    assert r.judge_mean is None and r.judge_id is None and r.notes["judge"] == "empty dossier" and r.notes["judge_error"] == "empty dossier"
     assert all(not m.seen for m in j.values())
 
 
@@ -306,3 +306,49 @@ def test_interrupted_run_records_spend_reraises_and_is_retried(cfg, exc):
     calls = []
     res = run(cfg1, run_arm_fn=fake_arm(text, spend=0.5, calls=calls), judges_override=judges(GOOD))
     assert len(calls) == 1 and res.spent_total_usd == pytest.approx(0.65 + 0.5)
+
+
+@pytest.mark.parametrize("exc", [asyncio.CancelledError, KeyboardInterrupt])
+def test_interrupt_during_judge_keeps_arm_spend(cfg, exc, monkeypatch):
+    import agora.eval.runner as rn
+    _, text = gold_text(cfg)
+
+    async def interrupted(*a, **k):
+        raise exc()
+
+    monkeypatch.setattr(rn, "judge_dossier_with_reason", interrupted)
+    cfg1 = cfg.model_copy(update={"arms": ["c0-deepseek"]})
+
+    j = judges()
+    models = {}
+
+    def fac(c):
+        models.update({k: (s, ScriptedChatModel()) for k, s in c.team_models.items()})
+        return dict(models)
+
+    with pytest.raises(exc):
+        run(cfg1, run_arm_fn=fake_arm(text, spend=1.25), judges_override=j, models_factory=fac)
+    row = ResultRow.from_json((Path(cfg.out_dir) / "results.jsonl").read_text().splitlines()[0])
+    assert row.status == "error" and row.spend_usd == 1.25
+    assert row.notes["error"] == "interrupted" and row.notes["interrupted_phase"] == "post-arm"
+    assert all(not m.callbacks for _, m in models.values())
+    monkeypatch.undo()
+    calls = []
+    res = run(cfg1, run_arm_fn=fake_arm(text, spend=0.5, calls=calls), judges_override=judges(GOOD, GOOD))
+    assert len(calls) == 1 and res.spent_total_usd == pytest.approx(1.25 + 0.5)
+
+
+def test_append_failure_does_not_mask_interrupt(cfg, monkeypatch):
+    import agora.eval.runner as rn
+    gold_text(cfg)
+
+    def bad(*a):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(rn, "_append", bad)
+
+    async def fn(*a):
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        run(cfg, run_arm_fn=fn, judges_override=judges())

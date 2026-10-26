@@ -107,10 +107,10 @@ def _spend(row: ResultRow) -> float:
     return row.spend_usd + row.judge_usd
 
 
-async def _judge(cfg, judge_id, judge_model, dossier, gold, timeout_s):
+async def _judge(cfg, judge_id, judge_model, dossier, gold, timeout_s, meter=None):
     """-> (judge_mean | None, judge_usd, note | None). Never raises."""
     spec = cfg.judges[judge_id]
-    meter = SpendMeter(cap_usd=float("inf"))
+    meter = meter or SpendMeter(cap_usd=float("inf"))
     model = judge_model if judge_model is not None else None
     try:
         if model is None:
@@ -218,6 +218,7 @@ async def _one_run(cfg, arm, variant, seed, brief, data_dir, db_path, gold, fact
         base_notes["stale_ledger"] = stale
     models = factory(cfg)  # a ConfigError (missing key) is fatal for the whole evaluation
     t0 = clock()
+    st = {"outcome": None, "text_path": "", "jmeter": SpendMeter(cap_usd=float("inf"))}
     try:
         for spec, m in models.values():
             acct.attach(m, spec)
@@ -230,18 +231,13 @@ async def _one_run(cfg, arm, variant, seed, brief, data_dir, db_path, gold, fact
             return ResultRow(arm, variant, seed, "error", spend, clock() - t0, 0.0, 0.0, False, 0.0, 0,
                              [], [], None, None, 0.0, "",
                              {**base_notes, "error": err, "acct_usd": acct.total_usd})
-        except (asyncio.CancelledError, KeyboardInterrupt):
-            _append(out / "results.jsonl", ResultRow(
-                arm, variant, seed, "error", max(acct.total_usd, meter.total_usd), clock() - t0, 0.0, 0.0,
-                False, 0.0, 0, [], [], None, None, 0.0, "",
-                {**base_notes, "error": "interrupted", "acct_usd": acct.total_usd}))
-            raise
         except Exception as e:
             spend = max(acct.total_usd, meter.total_usd)
             return ResultRow(arm, variant, seed, "error", spend, clock() - t0, 0.0, 0.0, False, 0.0, 0,
                              [], [], None, None, 0.0, "",
                              {**base_notes, "error": f"{type(e).__name__}: {str(e)[:300]}",
                               "acct_usd": acct.total_usd})
+        st["outcome"] = outcome
         spend = max(acct.total_usd, outcome.spend_usd)
         notes = {**dict(outcome.notes or {}), **base_notes, "acct_usd": acct.total_usd}
         if spend > cfg.budget_usd * 1.5:
@@ -252,6 +248,7 @@ async def _one_run(cfg, arm, variant, seed, brief, data_dir, db_path, gold, fact
         try:
             text_path.parent.mkdir(parents=True, exist_ok=True)
             text_path.write_text(outcome.final_text)
+            st["text_path"] = str(text_path)
             scores = score_dossier(outcome.final_text, gold, data_dir)
         except Exception as e:
             notes["scoring_error"] = f"{type(e).__name__}: {str(e)[:300]}"
@@ -260,11 +257,12 @@ async def _one_run(cfg, arm, variant, seed, brief, data_dir, db_path, gold, fact
         judge_mean, judge_id, judge_usd = None, None, 0.0
         if not outcome.final_text.strip():
             notes["judge"] = "empty dossier"
+            notes["judge_error"] = "empty dossier"
         else:
             judge_id = pick_judge(sorted(cfg.judges), variant, seed)
             jm = (judges_override or {}).get(judge_id)
             judge_mean, judge_usd, note = await _judge(cfg, judge_id, jm, outcome.final_text, gold,
-                                                       judge_timeout_s)
+                                                       judge_timeout_s, st["jmeter"])
             if note:
                 notes["judge"] = note
                 notes["judge_error"] = note
@@ -272,6 +270,20 @@ async def _one_run(cfg, arm, variant, seed, brief, data_dir, db_path, gold, fact
                          scores.recall, scores.summary_accuracy, scores.summary_present,
                          scores.citation_validity, scores.citations, list(scores.found),
                          list(scores.missed), judge_mean, judge_id, judge_usd, str(text_path), notes)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        oc = st["outcome"]
+        spend = max(acct.total_usd, meter.total_usd, oc.spend_usd if oc else 0.0)
+        notes = {**base_notes, "error": "interrupted", "acct_usd": acct.total_usd,
+                 "interrupted_phase": "post-arm" if oc else "arm"}
+        if oc:
+            notes["partial"] = True
+        try:
+            _append(out / "results.jsonl", ResultRow(
+                arm, variant, seed, "error", spend, clock() - t0, 0.0, 0.0, False, 0.0, 0, [], [],
+                None, None, st["jmeter"].total_usd, st["text_path"], notes))
+        except Exception as e:  # the original interrupt must always propagate
+            print(f"warning: could not record interrupted run: {e}", file=sys.stderr)
+        raise
     finally:
         for _, m in models.values():
             detach_all(m)
