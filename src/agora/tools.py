@@ -94,7 +94,7 @@ def make_peer_tools(agent_id: str, family: str, ledger: Ledger) -> list[BaseTool
         return f"OK: a task with that title already exists: {task.id}"
 
     def commit_artifact(task_id: str, content: str) -> str:
-        """Save your work product as a new artifact version for a task you hold."""
+        """Save your work product as a new artifact version for a work task you hold (not a review task; reviews take a verdict via review_verdict)."""
         a = ledger.artifacts.commit(task_id, agent_id, content)
         return f"OK: committed {a.id}"
 
@@ -118,10 +118,10 @@ def make_peer_tools(agent_id: str, family: str, ledger: Ledger) -> list[BaseTool
         return f"OK: sent message {m.id} to {to}"
 
     def submit_for_review(task_id: str) -> str:
-        """Submit your latest artifact for a task you hold once the work is complete."""
-        a = ledger.artifacts.latest(task_id)
+        """Submit your own latest artifact for a work task you hold once the work is complete (not for review tasks)."""
+        a = ledger.artifacts.latest(task_id, author=agent_id)
         if a is None:
-            raise LedgerError(f"commit an artifact for {task_id} before submitting")
+            raise LedgerError(f"commit your own artifact for {task_id} first")
         review = ledger.tasks.submit_for_review(task_id, agent_id, a.id)
         return f"OK: submitted {a.id}; review task {review.id} created"
 

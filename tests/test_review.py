@@ -200,3 +200,54 @@ def test_stale_review_cannot_reopen_done_task(ledger):
     assert work.status == "done" and work.artifact_id == a1.id
     assert ledger.tasks.get("review:A:2").status == "claimed"  # rolled back, no verdict recorded
     assert len(_review_notes(ledger)) == 1
+
+
+# ---- final-review fixes --------------------------------------------------------------------
+def test_submit_requires_own_artifact(ledger):
+    """Release -> reclaim by another family -> submit someone else's artifact is refused."""
+    art = claimed_with_artifact(ledger, "A", "P01", "deepseek")
+    ledger.tasks.release("A", "P01", "stuck")
+    ledger.tasks.claim("A", "P02", "anthropic")
+    with pytest.raises(LedgerError, match="written by"):
+        ledger.tasks.submit_for_review("A", "P02", art.id)
+    assert ledger.tasks.get("A").status == "claimed"
+
+
+def test_review_author_family_comes_from_artifact_author(ledger):
+    r = _submitted(ledger)
+    assert r.author_family == "deepseek"
+    with pytest.raises(ClaimRejected, match="own work"):
+        ledger.tasks.claim(r.id, "P01", "anthropic")
+
+
+def test_stale_commit_rejected_inside_transaction(ledger, monkeypatch):
+    claimed_with_artifact(ledger, "A", "P01", "deepseek")
+    ledger.tasks.release("A", "P01", "x")
+    ledger.tasks.claim("A", "P02", "anthropic")
+    monkeypatch.setattr(ledger.tasks, "_require_owner", lambda *a, **k: None)  # simulate the TOCTOU
+    with pytest.raises(LedgerError, match="not owner"):
+        ledger.artifacts.commit("A", "P01", "z" * 300)
+    assert ledger.artifacts.latest("A").author == "P01" and ledger.artifacts.latest("A").version == 1
+
+
+def test_review_tasks_take_no_artifacts_or_submissions(ledger):
+    r = _submitted(ledger, "B")
+    ledger.tasks.claim(r.id, "P03", "anthropic")
+    with pytest.raises(LedgerError, match="review_verdict"):
+        ledger.artifacts.commit(r.id, "P03", "w" * 300)
+    with pytest.raises(LedgerError, match="review_verdict"):
+        ledger.tasks.submit_for_review(r.id, "P03", "B@v1")
+
+
+def test_raising_validator_rejects_instead_of_crashing(tmp_path, clock):
+    def boom(task, artifact):
+        raise RuntimeError("kaput")
+
+    lg = open_ledger(str(tmp_path / "v.sqlite"), clock=clock, validators=[boom])
+    r = _submitted(lg)
+    lg.tasks.claim(r.id, "P03", "anthropic")
+    work = lg.tasks.record_verdict(r.id, "P03", True, "fine")
+    assert work.status == "claimed"
+    note = _review_notes(lg)[0]
+    assert note.text.startswith("REJECT A") and "boom: raised" in note.text
+    lg.db.close()

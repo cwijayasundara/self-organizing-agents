@@ -85,9 +85,9 @@ class TaskLedger:
         if task.kind != "review":
             return None
         author = None
-        if task.review_of is not None:
-            rows = self.db.read("SELECT owner FROM tasks WHERE id=?", (task.review_of,))
-            author = rows[0]["owner"] if rows else None
+        if task.artifact_id is not None:
+            rows = self.db.read("SELECT author FROM artifacts WHERE id=?", (task.artifact_id,))
+            author = rows[0]["author"] if rows else None
         if author is not None and agent_id == author:
             return "own work"
         if self.reviewer_family_must_differ and family == task.author_family:
@@ -222,10 +222,16 @@ class TaskLedger:
     def submit_for_review(self, task_id: str, agent_id: str, artifact_id: str) -> Task:
         """Move the work task to in_review and return the newly created review task."""
         work = self._require_owner(task_id, agent_id)
+        if work.kind == "review":
+            raise LedgerError("review tasks take a verdict, not an artifact; use review_verdict")
         with self.db.write() as c:
-            if not c.execute("SELECT 1 FROM artifacts WHERE id=? AND task_id=?",
-                             (artifact_id, task_id)).fetchone():
+            art = c.execute("SELECT author FROM artifacts WHERE id=? AND task_id=?",
+                            (artifact_id, task_id)).fetchone()
+            if art is None:
                 raise LedgerError(f"artifact {artifact_id} does not belong to task {task_id}")
+            if art["author"] != agent_id:
+                raise LedgerError(f"artifact {artifact_id} was written by {art['author']}, not by you; "
+                                  "commit your own artifact first")
             cur = c.execute(
                 "UPDATE tasks SET status='in_review', artifact_id=?, version=version+1 "
                 "WHERE id=? AND owner=? AND status='claimed'", (artifact_id, task_id, agent_id))
@@ -253,7 +259,12 @@ class TaskLedger:
         if not rows:
             raise LedgerError("review task has no artifact")
         artifact = artifact_from_row(rows[0])
-        errors = [e for v in self.validators for e in v(work, artifact)]
+        errors: list[str] = []
+        for v in self.validators:
+            try:
+                errors.extend(v(work, artifact))
+            except Exception as exc:  # a buggy validator rejects; it must not crash the reviewer's episode
+                errors.append(f"{getattr(v, '__name__', 'validator')}: raised {exc!r}")
         passed = approve and not errors
         with self.db.write() as c:
             cur = c.execute(

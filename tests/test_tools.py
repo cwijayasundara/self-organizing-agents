@@ -215,3 +215,26 @@ def test_read_artifact_truncated(ledger):
     out = t["read_artifact"].invoke({"task_id": "A"})
     assert out.count("q") == 20000
     assert out.endswith(f"{END}\n(truncated: 5000 more characters)")
+
+
+def test_submit_without_own_artifact_errors(ledger):
+    ledger.tasks.create_task(spec("A"))
+    t1, t2 = make_tools_by_name("P01", ledger), make_tools_by_name("P02", ledger, "anthropic")
+    t1["claim_task"].invoke({"task_id": "A"})
+    t1["commit_artifact"].invoke({"task_id": "A", "content": "z" * 300})
+    t1["release_task"].invoke({"task_id": "A", "reason": "x"})
+    t2["claim_task"].invoke({"task_id": "A"})
+    out = t2["submit_for_review"].invoke({"task_id": "A"})
+    assert out.startswith("ERROR") and "commit your own artifact for A first" in out
+    assert ledger.tasks.get("A").status == "claimed"
+
+
+def test_review_task_commit_and_submit_error(ledger):
+    ledger.tasks.create_task(spec("B"))
+    t1, t3 = make_tools_by_name("P01", ledger), make_tools_by_name("P03", ledger, "anthropic")
+    t1["claim_task"].invoke({"task_id": "B"})
+    t1["commit_artifact"].invoke({"task_id": "B", "content": "z" * 300})
+    t1["submit_for_review"].invoke({"task_id": "B"})
+    t3["claim_task"].invoke({"task_id": "review:B:1"})
+    assert t3["commit_artifact"].invoke({"task_id": "review:B:1", "content": "q" * 300}).startswith("ERROR")
+    assert t3["submit_for_review"].invoke({"task_id": "review:B:1"}).startswith("ERROR")

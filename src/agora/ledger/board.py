@@ -14,7 +14,6 @@ PLACEHOLDER_EVIDENCE = frozenset(
     {"tbd", "todo", "pending", "should work", "n/a", "na", "later", "unknown", "wip", "none"}
 )
 
-_DEFAULT_CAP = 100
 _CAPS = {
     "FACT": 100, "OBSERVED": 100, "FAIL": 100, "CLAIM": 100,
     "DECISION": 200,
