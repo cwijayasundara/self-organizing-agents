@@ -1,0 +1,45 @@
+data_root: data/eu
+gold_root: data/eu_gold
+out_dir: eval_runs/pilot
+brief_path: examples/eu_market_entry/brief.md
+template_path: examples/eu_market_entry/template.yaml
+budget_usd: 3
+wall_clock_s: 1500
+
+team_models:
+  deepseek:
+    provider: fireworks
+    id: accounts/fireworks/models/deepseek-v4p1-flash-1017
+    family: deepseek
+    temperature: 1.0
+    price: {in_per_m: 0.30, cached_per_m: 0.006, out_per_m: 1.20}
+  glm:
+    provider: fireworks
+    id: accounts/fireworks/models/glm-5p3-flash
+    family: zhipu
+    price: {in_per_m: 0.15, cached_per_m: 0.03, out_per_m: 0.50}
+
+judges:
+  haiku:
+    provider: anthropic
+    id: claude-haiku-5-5
+    family: anthropic
+    effort: medium
+    price: {in_per_m: 0.10, cached_per_m: 0.01, out_per_m: 0.50}
+    tiers:
+      - above_prompt_tokens: 100000
+        price: {in_per_m: 0.50, cached_per_m: 0.05, out_per_m: 2.50}
+  luna:
+    provider: openai
+    id: gpt-6-luna
+    family: openai
+    api: responses
+    reasoning_effort: low
+    price: {in_per_m: 0.10, cached_per_m: 0.01, out_per_m: 0.50}
+    tiers:
+      - above_prompt_tokens: 272000
+        price: {in_per_m: 0.20, cached_per_m: 0.02, out_per_m: 0.75}
+
+arms: [c0-deepseek, c0-glm, c1-10, c2-5, c2-3, c3-supervisor, a1-same-family]
+variants: [0]
+seeds: 1
