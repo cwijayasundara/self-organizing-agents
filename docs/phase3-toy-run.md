@@ -37,7 +37,7 @@ Every approval was by a different family than the author: 3 `REVIEW` APPROVE not
 
 ## Episodes and retirements
 
-T01 2, T02 1, T03 1 episodes; no peer retired. Notes: 3 CLAIM/FACT per active author, 7 PATCH_SUMMARY, 3 REVIEW.
+T01 2, T02 1, T03 1 episodes; no peer retired. Notes: 2 CLAIM, 3 FACT, 7 PATCH_SUMMARY, 3 REVIEW.
 
 ## Observations
 
