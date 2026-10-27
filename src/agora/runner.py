@@ -6,6 +6,7 @@ The runner never claims, assigns or reorders tasks; it only reads ledger state a
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
@@ -68,9 +69,22 @@ class SwarmRunner:
         self._stopping = False
         self.errors: dict[str, str] = {}
 
+    # ---- observability -------------------------------------------------------
+    def _emit(self, actor: str, kind: str, detail: str | None = None, task_id: str | None = None) -> None:
+        if self.ledger.events is not None:
+            self.ledger.events.emit(actor, kind, detail, task_id)
+
+    def _roster_detail(self) -> str:
+        peers = [{"id": p.id, "model": p.model, "family": self.roster.model_for(p.id).family, "lens": p.lens}
+                 for p in self.roster.peers]
+        b = self.roster.budget
+        return json.dumps({"run_name": self.roster.run_name, "peers": peers,
+                           "swarm_usd": b.swarm_usd, "wall_clock_s": b.wall_clock_s})
+
     # ---- public --------------------------------------------------------------
     async def run(self) -> RunResult:
         self.ledger.mail.register(self.ids)
+        self._emit("runner", "run_start", self._roster_detail())
         start = self.clock()
         loops = [asyncio.create_task(self._peer_loop(i, pid)) for i, pid in enumerate(self.ids)]
         try:
@@ -87,6 +101,7 @@ class SwarmRunner:
         for r in results:
             if isinstance(r, Exception):  # a bug in a loop must not vanish silently
                 raise r
+        self._emit("runner", "run_end", status)
         return RunResult(
             status=status,
             spent_usd=self.ledger.budget.spent(),
@@ -139,6 +154,7 @@ class SwarmRunner:
                 continue
             text = self._build_input(pid)
             self._started[pid] = True
+            self._emit(pid, "episode_start", text[:300])
             before = self.ledger.board.last_note_id(pid)
             fp_before = self._fingerprint()
             failed = False
@@ -163,6 +179,8 @@ class SwarmRunner:
             finally:
                 self._mid.discard(pid)
             self.episodes[pid] += 1
+            if failed:
+                self._emit(pid, "episode_failed", self.errors[pid])
             if self._check_exhausted(pid):
                 return
             if failed:
@@ -178,12 +196,15 @@ class SwarmRunner:
                 continue
             self._failures[pid] = 0
             wrote_note = self.ledger.board.last_note_id(pid) != before
+            changed = wrote_note or self._fingerprint() != fp_before
+            self._emit(pid, "episode_end", "progress" if changed else "no-op")
             if wrote_note:
                 self._nudged[pid] = False
             # At most one NUDGE per no-note streak, and only to a peer that still has something to do.
             elif not self._nudged[pid] and self._has_work(pid):
                 self._nudge[pid] = True
-            if not wrote_note and self._fingerprint() == fp_before:
+                self._emit("runner", "nudge", pid)
+            if not changed:
                 self._noop_streak[pid] += 1
                 await self.sleep(budget.idle_poll_s)  # cooldown after an episode that changed nothing
             else:
@@ -201,6 +222,7 @@ class SwarmRunner:
         if not self.ledger.budget.peer_exhausted(pid, self._peer_usd(pid)):
             return False
         self.exhausted.append(pid)
+        self._emit("runner", "peer_exhausted", pid)
         for t in self.ledger.tasks.held_by(pid):
             try:
                 self.ledger.tasks.release(t.id, pid, "peer budget exhausted")
@@ -214,6 +236,7 @@ class SwarmRunner:
 
     def _retire(self, pid: str) -> None:
         self.retired.append(pid)
+        self._emit("runner", "peer_retired", f"{pid}: {self.errors.get(pid, '')}")
         # in_review tasks are left alone: the ledger does not sweep them.
         for t in self.ledger.tasks.held_by(pid):
             try:
@@ -234,6 +257,7 @@ class SwarmRunner:
 
     def _warn(self, template: str, threshold: float) -> None:
         text = template.format(pct=round(threshold * 100))
+        self._emit("runner", "budget_warning", text)
         self.ledger.mail.send("runner", None, text, urgent=True)
         for pid in self.ids:
             if pid not in self.retired and pid not in self.exhausted:

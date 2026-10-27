@@ -73,3 +73,13 @@ CREATE TABLE IF NOT EXISTS spend (
     usd REAL NOT NULL,
     created_at REAL NOT NULL
 );
+
+-- Observability only: runner and tool activity for logs and the live view. Peers never read it.
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    task_id TEXT,
+    detail TEXT,
+    created_at REAL NOT NULL
+);

@@ -28,7 +28,7 @@ def test_pragmas_and_tables(tmp_path):
     assert db.read("PRAGMA foreign_keys")[0][0] == 1
     names = {r["name"] for r in db.read("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"notes", "tasks", "task_deps", "artifacts", "messages",
-            "deliveries", "cursors", "spend"} <= names
+            "deliveries", "cursors", "spend", "events"} <= names
     cols = {r["name"] for r in db.read("PRAGMA table_info(tasks)")}
     assert "title_key" in cols
     assert "invalidated" in {r["name"] for r in db.read("PRAGMA table_info(notes)")}

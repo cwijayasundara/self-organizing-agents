@@ -88,7 +88,7 @@ def test_validator_skips_review_tasks(data_dir):
 
 def test_fact_admission_requires_detail_citation(data_dir):
     adm = fact_citation_admission(data_dir)
-    msg = "FACT needs a data-room citation in detail"
+    msg = "FACT needs a data-room citation in detail, in square brackets like [file.md]"
     assert adm("P01", "FACT", "t", None) == [msg]
     assert adm("P01", "FACT", "t", "no cite") == [msg]
     assert adm("P01", "FACT", "t", "[nope.csv]") == [msg]
@@ -202,3 +202,11 @@ def test_truncated_block_does_not_swallow_later_valid_one():
     truncated = 'DOSSIER_SUMMARY\n```json\n{"recommendation": "ent\n```\n'
     assert parse_dossier_summary(truncated + "\n" + _block(s)) == s
     assert parse_dossier_summary('DOSSIER_SUMMARY\n```json\n{"recommendation": "ent\n\n' + _block(s)) == s
+
+
+def test_dossier_validator_names_the_offending_field():
+    check = dossier_summary_block()
+    out = check(_task("dossier"), _art(_block(_summary(arith_mismatch_eur="12")), "dossier"))
+    assert len(out) == 1 and "arith_mismatch_eur must be a JSON number without quotes" in out[0]
+    out = check(_task("dossier"), _art(_block(_summary(country_order=["DE"] * 4)), "dossier"))
+    assert "country_order must be a list of exactly 5" in out[0]

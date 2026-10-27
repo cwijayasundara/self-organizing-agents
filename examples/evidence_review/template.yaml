@@ -1,0 +1,62 @@
+tasks:
+- id: productivity
+  title: Productivity evidence
+  objective: Establish what the evidence says about the effect of a four-day week on productivity.
+  output_format: Markdown table of each source's finding plus notes, under 250 words.
+  acceptance:
+  - Lists every source in the evidence room that reports a productivity figure, with the figure, sample
+    size and measure used, each cited in [file] form.
+  - Reports results separately for each group of workers that a source breaks down, not only the headline
+    or overall figure.
+  - States which figures it relies on and which it discounts, with the reason and a citation for each.
+  deps: []
+- id: wellbeing_retention
+  title: Wellbeing and retention
+  objective: Assess the likely effect of a four-day week on wellbeing, sick leave and retention at Corvane,
+    using the studies and the staff survey.
+  output_format: Markdown, under 250 words.
+  acceptance:
+  - Gives the sick-leave and attrition findings from each study that reports them, cited in [file] form.
+  - Summarises [staff_survey.csv] by department, with the figures for each department cited.
+  - Names the departments where the survey and the studies point to the greatest risk, and explains why.
+  deps: []
+- id: cost_ops
+  title: Cost and operations
+  objective: Compute the annual cost of introducing a four-day week at Corvane and the operational constraints.
+  output_format: Markdown table plus notes, under 250 words.
+  acceptance:
+  - Lists each cost line from [cost_model.csv] and recomputes the total from the line items, showing the
+    sum.
+  - Reports every figure that does not reconcile, with the amounts that differ.
+  - Relates each staffing cost line to the department headcounts in [staff_survey.csv].
+  deps: []
+- id: source_quality
+  title: Source credibility
+  objective: Rate the credibility of every study, report and article in the evidence room before others
+    rely on it.
+  output_format: Markdown table (one row per source) plus notes, under 250 words.
+  acceptance:
+  - Rates each source for design, sample size, peer-review status, and funding or conflicts of interest,
+    each cited in [file] form.
+  - Checks each headline claim against the source's own tables and against the other files in the evidence
+    room, and reports every mismatch with the figures involved.
+  - States which sources should not be relied on, and why.
+  deps: []
+- id: synthesis
+  title: Four-day week research memo
+  objective: Combine the four sections into one recommendation for Corvane's leadership, choosing one of
+    the three options in the brief.
+  output_format: Markdown memo, under 450 words (the RESEARCH_SUMMARY block does not count), ending with
+    the RESEARCH_SUMMARY block.
+  acceptance:
+  - Cites each section's artifact by its task id.
+  - States exactly one of the three options and justifies it with figures from the sections, citing evidence-room
+    files in [file] form.
+  - Lists every source it discounts and every inconsistency found in the evidence, with the files involved.
+  - Ends with the RESEARCH_SUMMARY block in the exact format given in the brief.
+  deps:
+  - productivity
+  - wellbeing_retention
+  - cost_ops
+  - source_quality
+  kind: integration

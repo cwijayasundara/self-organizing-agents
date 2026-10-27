@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agora live view</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --panel-2: #f0f2f5; --line: #dfe3ea; --text: #1b1f29; --muted: #687085;
+    --accent: #3b6df6; --ok: #1f9d55; --warn: #c27c0e; --bad: #d64545;
+    --fam-0: #0d9488; --fam-1: #7c3aed; --fam-2: #d97706; --fam-3: #db2777; --fam-4: #0284c7; --fam-x: #8a91a5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1016; --panel: #161a23; --panel-2: #1c212c; --line: #2a3040; --text: #e5e8ef; --muted: #8b93a7;
+      --accent: #6b93ff; --ok: #3ccf7e; --warn: #f0b440; --bad: #f06a6a;
+      --fam-0: #2dd4bf; --fam-1: #a78bfa; --fam-2: #fbbf24; --fam-3: #f472b6; --fam-4: #38bdf8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; padding: 12px 18px;
+           border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header h1 span { color: var(--muted); font-weight: 450; }
+  .pill { padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
+  .pill.running { color: var(--accent); } .pill.done { color: var(--ok); }
+  .pill.budget, .pill.timeout, .pill.stalled { color: var(--warn); } .pill.waiting { color: var(--muted); }
+  .metrics { display: flex; flex-wrap: wrap; gap: 18px; margin-left: auto; }
+  .metric { display: flex; flex-direction: column; min-width: 64px; }
+  .metric b { font-size: 15px; font-variant-numeric: tabular-nums; }
+  .metric small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .bar { height: 4px; background: var(--panel-2); border-radius: 2px; margin-top: 3px; width: 110px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .5s; }
+  main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); gap: 14px; padding: 14px 18px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  section > h2 { margin: 0; padding: 9px 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px;
+                 color: var(--muted); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  section > h2 .sp { flex: 1; }
+  .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  /* swarm graph */
+  #graph { width: 100%; height: auto; display: block; }
+  .spoke { stroke: var(--line); stroke-width: 1; }
+  .hub circle { fill: var(--panel-2); stroke: var(--line); stroke-width: 1.5; }
+  .hub text { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  .hub .big { fill: var(--text); font-size: 13px; font-weight: 650; }
+  .peer .body { stroke-width: 2; transition: fill-opacity .3s; }
+  .peer text { text-anchor: middle; fill: var(--text); }
+  .peer .id { font-size: 12px; font-weight: 700; }
+  .peer .sub { font-size: 10px; fill: var(--muted); }
+  .peer .ring { fill: none; stroke-width: 2; stroke-dasharray: 5 6; opacity: 0; transform-box: fill-box;
+                transform-origin: center; }
+  .peer.working .ring { opacity: 1; animation: spin 2.4s linear infinite; }
+  .peer.working .body { fill-opacity: .35; }
+  .peer.off .body { stroke: var(--fam-x) !important; fill: var(--fam-x) !important; fill-opacity: .08; }
+  .peer.off .id { fill: var(--muted); text-decoration: line-through; }
+  .peer.flash .body { animation: flash .6s ease-out; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes flash { 0% { stroke-width: 7; } 100% { stroke-width: 2; } }
+  .dm { fill: none; stroke-width: 1.6; opacity: .9; transition: opacity 4s; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 14px; border-top: 1px solid var(--line);
+            color: var(--muted); font-size: 11.5px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  /* task board */
+  .board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px; }
+  @media (max-width: 640px) { .board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .lane h3 { margin: 0 0 8px; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px;
+             display: flex; justify-content: space-between; }
+  .card { background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--line);
+          border-radius: 7px; padding: 7px 9px; margin-bottom: 7px; cursor: pointer; transition: transform .15s; }
+  .card:hover { transform: translateY(-1px); border-color: var(--accent); }
+  .card .t { font-weight: 600; font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+             overflow: hidden; }
+  .card .m { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; font-size: 11px; color: var(--muted); align-items: center; }
+  .card.new { animation: pop .8s ease-out; }
+  @keyframes pop { 0% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .tag { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 10.5px; }
+  .chip { border-radius: 4px; padding: 0 6px; font-weight: 700; font-size: 11px; color: #fff; }
+  /* agents */
+  .agents { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .agents td, .agents th { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  .agents th { color: var(--muted); font-weight: 500; font-size: 11px; }
+  .agents td.last { white-space: normal; color: var(--muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+  .agents tr { cursor: pointer; } .agents tr.sel td { background: var(--panel-2); }
+  .state { font-size: 11px; font-weight: 600; } .state.working { color: var(--accent); }
+  .state.idle { color: var(--muted); } .state.off { color: var(--bad); }
+  /* feed */
+  .filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .filters button { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 99px;
+                    padding: 2px 9px; font-size: 11.5px; cursor: pointer; }
+  .filters button.on { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
+  #feed { max-height: 62vh; overflow-y: auto; }
+  .ev { display: grid; grid-template-columns: 44px 44px 1fr; gap: 6px; padding: 5px 12px; border-bottom: 1px solid var(--line);
+        font-size: 12px; align-items: baseline; }
+  .ev .ts { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .ev .who { font-weight: 700; font-size: 11.5px; }
+  .ev .txt { word-break: break-word; }
+  .ev .k { font-size: 10.5px; font-weight: 700; margin-right: 5px; letter-spacing: .3px; }
+  .ev.fresh { animation: fresh 1.5s ease-out; }
+  @keyframes fresh { from { background: var(--panel-2); } to { background: transparent; } }
+  .empty { padding: 24px; color: var(--muted); text-align: center; }
+  /* modal */
+  dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text);
+           width: min(860px, 94vw); max-height: 86vh; padding: 0; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog header { position: static; }
+  dialog .body { padding: 14px 18px; overflow-y: auto; max-height: calc(86vh - 56px); }
+  dialog pre { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+               padding: 12px; font-size: 12px; }
+  .ledger-btn { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 7px;
+                padding: 4px 11px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .ledger-btn:hover { border-color: var(--accent); }
+  .ledger-btn b { color: var(--accent); font-variant-numeric: tabular-nums; }
+  .hub { cursor: pointer; } .hub:hover circle { stroke: var(--accent); }
+  #ledgerDlg { width: min(1100px, 96vw); }
+  .lbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+  .lbar select, .lbar input { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+                              padding: 4px 8px; font-size: 12.5px; }
+  .lbar input { flex: 1; min-width: 160px; }
+  .lbar .tabs button { margin: 0; border-radius: 0; border-right-width: 0; }
+  .lbar .tabs button:first-child { border-radius: 6px 0 0 6px; }
+  .lbar .tabs button:last-child { border-radius: 0 6px 6px 0; border-right-width: 1px; }
+  .lbar .tabs button.on { background: var(--panel-2); border-color: var(--accent); color: var(--text); }
+  .lbar .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .lrow { display: grid; grid-template-columns: 46px 50px 54px 1fr; gap: 8px; padding: 8px 18px; border-bottom: 1px solid var(--line);
+          font-size: 12.5px; align-items: baseline; }
+  .lrow.old { opacity: .5; }
+  .lrow .idn { color: var(--muted); font-size: 11px; }
+  .lrow .txt { word-break: break-word; white-space: pre-wrap; }
+  .lrow .det { display: block; color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+  .lrow .k { font-size: 10.5px; font-weight: 700; margin-right: 6px; letter-spacing: .3px; }
+  #ledgerList { max-height: calc(86vh - 120px); overflow-y: auto; }
+  dialog button { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--text);
+                  border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>agora <span id="runName">· waiting for ledger…</span></h1>
+  <span id="status" class="pill waiting">waiting</span>
+  <button class="ledger-btn" id="ledgerBtn" title="Every board note and message the agents wrote to the shared ledger">📜 Ledger · <b id="ledgerCount">0</b></button>
+  <div class="metrics">
+    <div class="metric"><b id="mElapsed">–</b><small>elapsed</small></div>
+    <div class="metric"><b id="mSpend">$0.00</b><small>spend</small><div class="bar"><i id="mSpendBar"></i></div></div>
+    <div class="metric"><b id="mTasks">0/0</b><small>tasks done</small></div>
+    <div class="metric"><b id="mNotes">0</b><small>board notes</small></div>
+    <div class="metric"><b id="mMsgs">0</b><small>messages</small></div>
+    <div class="metric"><b id="mTools">0</b><small>tool calls</small></div>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <section>
+      <h2>Swarm <span class="sp"></span><span id="graphHint" style="text-transform:none;letter-spacing:0">peers coordinate only through the shared ledger</span></h2>
+      <svg id="graph" viewBox="0 0 640 470" role="img" aria-label="Swarm communication graph"></svg>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--accent)"></i>board note → ledger</span>
+        <span><i class="dot" style="background:var(--ok)"></i>task claimed / approved</span>
+        <span><i class="dot" style="background:var(--warn)"></i>direct message</span>
+        <span><i class="dot" style="background:var(--bad)"></i>failure / rejection</span>
+        <span>dashed ring = agent is in an episode</span>
+        <span id="famLegend"></span>
+      </div>
+    </section>
+    <section>
+      <h2>Task board <span class="sp"></span><span style="text-transform:none;letter-spacing:0">click a card for its artifact</span></h2>
+      <div class="board" id="board"></div>
+    </section>
+  </div>
+  <div class="col">
+    <section>
+      <h2>Agents</h2>
+      <table class="agents"><thead><tr><th>agent</th><th>state</th><th>holds</th><th>ep.</th><th>$</th><th>last action</th></tr></thead>
+        <tbody id="agents"></tbody></table>
+    </section>
+    <section>
+      <h2>Activity <span class="sp"></span><span id="feedScope" style="text-transform:none;letter-spacing:0"></span></h2>
+      <div class="filters" id="filters"></div>
+      <div id="feed"><div class="empty">Waiting for activity…</div></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="ledgerDlg">
+  <header><h1>Shared ledger · board notes and messages</h1><button onclick="document.getElementById('ledgerDlg').close()">Close</button></header>
+  <div class="lbar">
+    <span class="tabs" id="lTabs"></span>
+    <select id="lAgent"><option value="">all agents</option></select>
+    <select id="lType"><option value="">all note types</option></select>
+    <input id="lSearch" type="search" placeholder="search text, evidence, task id…">
+    <select id="lOrder"><option value="desc">newest first</option><option value="asc">oldest first</option></select>
+    <span class="count" id="lCount"></span>
+  </div>
+  <div id="ledgerList"></div>
+</dialog>
+
+<dialog id="dlg">
+  <header><h1 id="dlgTitle"></h1><button onclick="document.getElementById('dlg').close()">Close</button></header>
+  <div class="body" id="dlgBody"></div>
+</dialog>
+
+<script>
+"use strict";
+const COORD_TOOLS = new Set(["claim_task", "release_task", "renew_task", "create_task", "commit_artifact",
+  "submit_for_review", "review_verdict", "send_dm", "board_write"]);
+const CATS = [["note", "Notes", true], ["msg", "Messages", true], ["coord", "Coordination", true],
+  ["episode", "Episodes", true], ["runner", "Runner", true], ["tool", "Other tools", false]];
+const NOTE_COLOR = { FAIL: "--bad", DISSENT: "--bad", REVIEW: "--ok", CLAIM: "--warn", DECISION: "--fam-1" };
+
+const S = { ids: { notes: 0, messages: 0, events: 0 }, roster: null, peers: [], fam: {}, tasks: [], taskMap: {},
+  spend: {}, agents: {}, counts: { notes: 0, msgs: 0, tools: 0 }, startedAt: null, ended: null, first: true,
+  filters: Object.fromEntries(CATS.map(c => [c[0], c[2]])), agentFilter: null, feedCount: 0, pos: {},
+  ledger: [], ltab: "all" };
+const $ = id => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function el(tag, attrs = {}, text) {
+  const e = tag.startsWith("svg:") ? document.createElementNS(NS, tag.slice(4)) : document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+const famVar = pid => S.fam[pid] !== undefined ? `--fam-${S.fam[pid] % 5}` : "--fam-x";
+const famColor = pid => css(famVar(pid));
+const clock = ts => {
+  if (!S.startedAt || !ts) return "";
+  const s = Math.max(0, Math.round(ts - S.startedAt));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+/* ---------- roster & graph ---------- */
+function ensurePeer(pid) {
+  if (!pid || pid === "runner" || pid === "ledger" || S.agents[pid]) return;
+  S.agents[pid] = { state: "idle", episodes: 0, last: "", off: false };
+  if (!S.peers.includes(pid)) { S.peers.push(pid); buildGraph(); }
+}
+function setRoster(r) {
+  if (!r || S.roster) return;
+  S.roster = r;
+  $("runName").textContent = "· " + r.run_name;
+  const fams = [...new Set(r.peers.map(p => p.family))];
+  r.peers.forEach(p => { S.fam[p.id] = fams.indexOf(p.family); });
+  S.peers = r.peers.map(p => p.id);
+  r.peers.forEach(p => ensurePeer(p.id));
+  const leg = $("famLegend"); leg.textContent = "";
+  fams.forEach((f, i) => {
+    const s = el("span"); const d = el("i", { class: "dot", style: `background:var(--fam-${i % 5})` });
+    s.append(d, document.createTextNode(`${f} family`)); leg.append(s);
+  });
+  buildGraph();
+}
+function buildGraph() {
+  const g = $("graph"); g.textContent = "";
+  const cx = 320, cy = 235, R = 185, n = S.peers.length;
+  S.pos = { hub: [cx, cy] };
+  S.peers.forEach((pid, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(n, 1);
+    S.pos[pid] = [cx + R * Math.cos(a), cy + R * Math.sin(a)];
+  });
+  const spokes = el("svg:g"); g.append(spokes);
+  S.peers.forEach(pid => spokes.append(el("svg:line", { class: "spoke", x1: cx, y1: cy, x2: S.pos[pid][0], y2: S.pos[pid][1] })));
+  g.append(el("svg:g", { id: "dmLayer" }));
+  const hub = el("svg:g", { class: "hub", id: "hub" });
+  hub.append(el("svg:circle", { cx, cy, r: 52 }), el("svg:text", { x: cx, y: cy - 4, class: "big" }, "Ledger"),
+    el("svg:text", { x: cx, y: cy + 12 }, "board · tasks · mail"));
+  hub.addEventListener("click", openLedger);
+  g.append(hub);
+  S.peers.forEach(pid => {
+    const [x, y] = S.pos[pid], c = famColor(pid);
+    const p = el("svg:g", { class: "peer", id: "peer-" + pid });
+    const title = el("svg:title"); const spec = S.roster && S.roster.peers.find(q => q.id === pid);
+    title.textContent = spec ? `${pid} · ${spec.model} (${spec.family})\nlens: ${spec.lens || "—"}` : pid;
+    p.append(title,
+      el("svg:circle", { class: "ring", cx: x, cy: y, r: 30, stroke: c }),
+      el("svg:circle", { class: "body", cx: x, cy: y, r: 24, fill: c, "fill-opacity": .14, stroke: c }),
+      el("svg:text", { class: "id", x, y: y + 4 }, pid),
+      el("svg:text", { class: "sub", x, y: y + 40, id: "sub-" + pid }, ""));
+    p.addEventListener("click", () => toggleAgentFilter(pid));
+    g.append(p);
+  });
+  g.append(el("svg:g", { id: "fxLayer" }));
+  renderAgents();
+}
+function animDot(from, to, color, ms = 900) {
+  const a = S.pos[from], b = S.pos[to];
+  if (!a || !b || document.hidden) return;
+  const dot = el("svg:circle", { r: 5, fill: color }); $("fxLayer").append(dot);
+  const t0 = performance.now();
+  (function step(t) {
+    const k = Math.min(1, (t - t0) / ms), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    dot.setAttribute("cx", a[0] + (b[0] - a[0]) * e); dot.setAttribute("cy", a[1] + (b[1] - a[1]) * e);
+    dot.setAttribute("opacity", k > .85 ? (1 - k) / .15 : 1);
+    if (k < 1) requestAnimationFrame(step); else dot.remove();
+  })(t0);
+}
+function animDM(from, to, color) {
+  const a = S.pos[from], b = S.pos[to];
+  if (!a || !b) return;
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, [hx, hy] = S.pos.hub;
+  const qx = mx + (mx - hx) * .35, qy = my + (my - hy) * .35;
+  const path = el("svg:path", { class: "dm", d: `M${a[0]},${a[1]} Q${qx},${qy} ${b[0]},${b[1]}`, stroke: color });
+  $("dmLayer").append(path);
+  requestAnimationFrame(() => requestAnimationFrame(() => path.style.opacity = 0));
+  setTimeout(() => path.remove(), 4200);
+  const len = path.getTotalLength(), dot = el("svg:circle", { r: 4.5, fill: color }); $("fxLayer").append(dot);
+  const t0 = performance.now();
+  (function step(t) {
+    const k = Math.min(1, (t - t0) / 1100), p = path.getPointAtLength(len * k);
+    dot.setAttribute("cx", p.x); dot.setAttribute("cy", p.y);
+    if (k < 1) requestAnimationFrame(step); else dot.remove();
+  })(t0);
+}
+function flash(pid) {
+  const p = $("peer-" + pid); if (!p) return;
+  p.classList.remove("flash"); void p.getBBox(); p.classList.add("flash");
+}
+function ripple(color) {
+  const [x, y] = S.pos.hub, c = el("svg:circle", { cx: x, cy: y, r: 52, fill: "none", stroke: color, "stroke-width": 2 });
+  $("fxLayer").append(c); const t0 = performance.now();
+  (function step(t) {
+    const k = Math.min(1, (t - t0) / 1400);
+    c.setAttribute("r", 52 + 170 * k); c.setAttribute("opacity", 1 - k);
+    if (k < 1) requestAnimationFrame(step); else c.remove();
+  })(t0);
+}
+
+/* ---------- feed ---------- */
+function buildFilters() {
+  const f = $("filters");
+  CATS.forEach(([key, label]) => {
+    const b = el("button", { class: S.filters[key] ? "on" : "" }, label);
+    b.onclick = () => { S.filters[key] = !S.filters[key]; b.classList.toggle("on"); applyFilters(); };
+    f.append(b);
+  });
+}
+function toggleAgentFilter(pid) {
+  S.agentFilter = S.agentFilter === pid ? null : pid;
+  $("feedScope").textContent = S.agentFilter ? `only ${S.agentFilter} · click again to clear` : "";
+  renderAgents(); applyFilters();
+}
+function visible(node) {
+  return S.filters[node.dataset.cat] && (!S.agentFilter || node.dataset.who.split(" ").includes(S.agentFilter));
+}
+function applyFilters() { for (const n of $("feed").children) if (n.dataset) n.style.display = visible(n) ? "" : "none"; }
+function addFeed(item) {
+  const feed = $("feed");
+  if (S.feedCount === 0) feed.textContent = "";
+  const row = el("div", { class: "ev" + (S.first ? "" : " fresh") });
+  row.dataset.cat = item.cat; row.dataset.who = item.who.join(" ");
+  const who = el("div", { class: "who" }, item.who[0] || "");
+  if (S.agents[item.who[0]]) who.style.color = famColor(item.who[0]);
+  const txt = el("div", { class: "txt" });
+  if (item.kind) { const k = el("span", { class: "k" }, item.kind); k.style.color = css(item.color || "--muted"); txt.append(k); }
+  txt.append(document.createTextNode(item.text));
+  row.append(el("div", { class: "ts mono" }, clock(item.ts)), who, txt);
+  row.style.display = visible(row) ? "" : "none";
+  const stick = feed.scrollTop < 20;
+  feed.prepend(row); S.feedCount++;
+  while (feed.children.length > 800) feed.lastChild.remove();
+  if (!stick) feed.scrollTop += row.offsetHeight;
+}
+
+/* ---------- ingest ---------- */
+function toolName(detail) { return (detail || "").split("(")[0]; }
+function ingest(st) {
+  const items = [];
+  for (const e of st.events) {
+    S.ids.events = e.id; ensurePeer(e.actor);
+    const ag = S.agents[e.actor];
+    switch (e.kind) {
+      case "run_start": setRoster(JSON.parse(e.detail)); S.startedAt = e.created_at;
+        items.push({ ts: e.created_at, cat: "runner", who: ["runner"], kind: "START", text: `run started with ${S.peers.length} peers`, fx: () => ripple(css("--accent")) }); break;
+      case "run_end": items.push({ ts: e.created_at, cat: "runner", who: ["runner"], kind: "END", color: "--ok", text: `run ended: ${e.detail}` }); break;
+      case "episode_start": ag.state = "working"; ag.episodes++;
+        items.push({ ts: e.created_at, cat: "episode", who: [e.actor], kind: "▶ EPISODE " + ag.episodes, text: (e.detail || "").split("\n")[0].slice(0, 120) }); break;
+      case "episode_end": if (!ag.off) ag.state = "idle";
+        if (e.detail === "no-op") items.push({ ts: e.created_at, cat: "episode", who: [e.actor], kind: "■ NO-OP", text: "episode changed nothing on the ledger" });
+        break;
+      case "episode_failed": if (!ag.off) ag.state = "idle";
+        items.push({ ts: e.created_at, cat: "episode", who: [e.actor], kind: "✗ FAILED", color: "--bad", text: e.detail, fx: () => flash(e.actor) }); break;
+      case "tool": case "tool_error": {
+        S.counts.tools++; const name = toolName(e.detail), coord = COORD_TOOLS.has(name), err = e.kind === "tool_error";
+        ag.last = e.detail;
+        const fx = () => {
+          if (name === "claim_task" && !err) animDot("hub", e.actor, css("--ok"));
+          else if (["submit_for_review", "commit_artifact", "create_task", "release_task"].includes(name)) animDot(e.actor, "hub", css("--accent"));
+          else if (name === "review_verdict") animDot(e.actor, "hub", css(/approve=True/i.test(e.detail) ? "--ok" : "--bad"));
+          else if (err) flash(e.actor);
+        };
+        if (name === "board_write" || name === "send_dm") { if (err) items.push({ ts: e.created_at, cat: "coord", who: [e.actor], kind: "⚠ REFUSED", color: "--bad", text: e.detail, fx }); break; }
+        items.push({ ts: e.created_at, cat: coord ? "coord" : "tool", who: [e.actor], kind: err ? "⚠ " + name : name, color: err ? "--bad" : (coord ? "--accent" : "--muted"),
+          text: e.detail.slice(name.length), fx }); break;
+      }
+      case "nudge": items.push({ ts: e.created_at, cat: "runner", who: ["runner", e.detail], kind: "NUDGE", color: "--warn", text: `nudged ${e.detail} to post on the board`, fx: () => animDot("hub", e.detail, css("--warn")) }); break;
+      case "peer_retired": case "peer_exhausted": {
+        const pid = (e.detail || "").split(":")[0]; ensurePeer(pid);
+        S.agents[pid].off = true; S.agents[pid].state = e.kind === "peer_retired" ? "retired" : "out of budget";
+        items.push({ ts: e.created_at, cat: "runner", who: ["runner", pid], kind: e.kind === "peer_retired" ? "RETIRED" : "EXHAUSTED", color: "--bad", text: e.detail }); break;
+      }
+      case "budget_warning": items.push({ ts: e.created_at, cat: "runner", who: ["runner"], kind: "WARNING", color: "--warn", text: e.detail, fx: () => ripple(css("--warn")) }); break;
+      default: items.push({ ts: e.created_at, cat: "runner", who: [e.actor], kind: e.kind, text: e.detail || "" });
+    }
+  }
+  for (const n of st.notes) {
+    S.ids.notes = n.id; S.counts.notes++; ensurePeer(n.author);
+    S.ledger.push({ kind: "note", id: n.id, ts: n.created_at, who: n.author, type: n.type, task: n.task_id,
+      text: n.text, detail: n.detail, old: !!n.invalidated });
+    if (S.agents[n.author]) S.agents[n.author].last = `${n.type}: ${n.text}`;
+    const color = NOTE_COLOR[n.type] || "--accent";
+    items.push({ ts: n.created_at, cat: "note", who: [n.author], kind: n.type + (n.task_id ? " " + n.task_id : ""), color,
+      text: n.text, fx: () => animDot(n.author, "hub", css(color)) });
+  }
+  for (const m of st.messages) {
+    S.ids.messages = m.id; S.counts.msgs++; ensurePeer(m.sender); ensurePeer(m.recipient);
+    S.ledger.push({ kind: "msg", id: m.id, ts: m.created_at, who: m.sender, to: m.recipient, urgent: !!m.urgent, text: m.text });
+    const to = m.recipient || "all";
+    items.push({ ts: m.created_at, cat: "msg", who: [m.sender, ...(m.recipient ? [m.recipient] : [])], kind: `→ ${to}${m.urgent ? " !" : ""}`,
+      color: "--warn", text: m.text, fx: () => m.recipient ? animDM(m.sender, m.recipient, css("--warn"))
+        : (m.sender === "runner" ? ripple(css("--warn")) : S.peers.filter(p => p !== m.sender).forEach(p => animDM(m.sender, p, css("--warn")))) });
+  }
+  items.sort((a, b) => a.ts - b.ts);
+  if (!S.startedAt && items.length) S.startedAt = items[0].ts;  // ledgers from before the event log
+  const animate = !S.first && items.length <= 60;
+  items.forEach((it, i) => {
+    addFeed(it);
+    if (animate && it.fx) setTimeout(it.fx, Math.min(i * 140, 3000));
+  });
+}
+
+/* ---------- tasks, agents, header ---------- */
+function renderTasks(tasks) {
+  const prev = S.taskMap; S.taskMap = Object.fromEntries(tasks.map(t => [t.id, t])); S.tasks = tasks;
+  const lanes = [["open", "Open"], ["claimed", "Claimed"], ["in_review", "In review"], ["done", "Done"]];
+  const board = $("board"); board.textContent = "";
+  for (const [status, label] of lanes) {
+    const list = tasks.filter(t => t.status === status);
+    const lane = el("div", { class: "lane" }), h = el("h3");
+    h.append(el("span", {}, label), el("span", { class: "mono" }, String(list.length)));
+    lane.append(h);
+    for (const t of list) {
+      const card = el("div", { class: "card" + (!S.first && (!prev[t.id] || prev[t.id].status !== t.status) ? " new" : "") });
+      if (t.owner) card.style.borderLeftColor = famColor(t.owner);
+      card.append(el("div", { class: "t" }, `${t.id} · ${t.title}`));
+      const m = el("div", { class: "m" });
+      if (t.kind !== "work") m.append(el("span", { class: "tag" }, t.kind === "review" ? `reviews ${t.review_of}` : t.kind));
+      if (!t.required && t.kind !== "review") m.append(el("span", { class: "tag" }, "optional"));
+      if (t.owner) { const c = el("span", { class: "chip" }, t.owner); c.style.background = famColor(t.owner); m.append(c); }
+      const blocked = t.status === "open" ? t.deps.filter(d => S.taskMap[d] && S.taskMap[d].status !== "done") : [];
+      if (blocked.length) m.append(el("span", {}, "waits on " + blocked.join(", ")));
+      if (t.artifact_id) m.append(el("span", { class: "mono" }, t.artifact_id));
+      card.append(m);
+      card.onclick = () => openTask(t);
+      lane.append(card);
+    }
+    board.append(lane);
+  }
+}
+async function openTask(t) {
+  $("dlgTitle").textContent = `${t.id} · ${t.title}`;
+  const body = $("dlgBody"); body.textContent = "";
+  body.append(el("p", {}, t.objective || ""),
+    el("p", { style: "color:var(--muted)" }, `status ${t.status}${t.owner ? " · owner " + t.owner : ""}${t.deps.length ? " · depends on " + t.deps.join(", ") : ""}`));
+  $("dlg").showModal();
+  const target = t.kind === "review" && t.review_of ? t.review_of : t.id;
+  const r = await fetch(`/api/artifact?task=${encodeURIComponent(target)}`);
+  if (r.ok) {
+    const a = await r.json();
+    body.append(el("p", { style: "color:var(--muted)" }, `latest artifact ${a.id} by ${a.author}`), el("pre", { class: "mono" }, a.content));
+  } else body.append(el("p", { style: "color:var(--muted)" }, "No artifact committed yet."));
+}
+function renderAgents() {
+  const tb = $("agents"); tb.textContent = "";
+  for (const pid of S.peers) {
+    const a = S.agents[pid]; if (!a) continue;
+    const held = S.tasks.filter(t => t.owner === pid && t.status === "claimed").map(t => t.id).join(", ");
+    const tr = el("tr", { class: S.agentFilter === pid ? "sel" : "" });
+    const id = el("td"); const c = el("span", { class: "chip" }, pid); c.style.background = famColor(pid); id.append(c);
+    const cls = a.off ? "off" : a.state;
+    tr.append(id, (() => { const td = el("td"); td.append(el("span", { class: "state " + cls }, a.state)); return td; })(),
+      el("td", { class: "mono" }, held || "—"), el("td", { class: "mono" }, String(a.episodes)),
+      el("td", { class: "mono" }, (S.spend[pid] ? S.spend[pid].usd : 0).toFixed(3)),
+      el("td", { class: "last", title: a.last }, a.last.slice(0, 70)));
+    tr.onclick = () => toggleAgentFilter(pid);
+    tb.append(tr);
+    const node = $("peer-" + pid);
+    if (node) {
+      node.classList.toggle("working", a.state === "working");
+      node.classList.toggle("off", a.off);
+      $("sub-" + pid).textContent = held || (a.off ? a.state : "");
+    }
+  }
+}
+function renderHeader(st) {
+  const status = st.waiting ? "waiting" : (st.ended ? st.ended.status : "running");
+  const pill = $("status"); pill.className = "pill " + status; pill.textContent = status;
+  const end = st.ended ? st.ended.at : Date.now() / 1000;
+  if (S.startedAt) { const s = Math.round(end - S.startedAt); $("mElapsed").textContent = `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; }
+  const total = Object.values(S.spend).reduce((x, r) => x + (r.usd || 0), 0);
+  const cap = S.roster ? S.roster.swarm_usd : 0;
+  $("mSpend").textContent = `$${total.toFixed(2)}${cap ? " / $" + cap : ""}`;
+  $("mSpendBar").style.width = cap ? Math.min(100, 100 * total / cap) + "%" : "0";
+  $("mTasks").textContent = `${S.tasks.filter(t => t.status === "done").length}/${S.tasks.length}`;
+  $("mNotes").textContent = S.counts.notes; $("mMsgs").textContent = S.counts.msgs; $("mTools").textContent = S.counts.tools;
+}
+
+/* ---------- ledger popup ---------- */
+function setupLedger() {
+  $("ledgerBtn").onclick = openLedger;
+  for (const [key, label] of [["all", "All"], ["note", "Board notes"], ["msg", "Messages"]]) {
+    const b = el("button", { class: "ledger-btn" + (key === S.ltab ? " on" : "") }, label);
+    b.onclick = () => { S.ltab = key; for (const x of $("lTabs").children) x.classList.toggle("on", x === b); renderLedger(); };
+    $("lTabs").append(b);
+  }
+  for (const id of ["lAgent", "lType", "lOrder"]) $(id).onchange = renderLedger;
+  $("lSearch").oninput = renderLedger;
+}
+function openLedger() { syncLedgerOptions(); renderLedger(); $("ledgerDlg").showModal(); }
+function syncLedgerOptions() {
+  const fill = (sel, values) => {
+    const have = new Set([...sel.options].map(o => o.value));
+    values.filter(v => !have.has(v)).forEach(v => sel.append(el("option", { value: v }, v)));
+  };
+  fill($("lAgent"), [...new Set(S.ledger.map(r => r.who).concat(S.peers))].sort());
+  fill($("lType"), [...new Set(S.ledger.filter(r => r.kind === "note").map(r => r.type))].sort());
+}
+function renderLedger() {
+  const agent = $("lAgent").value, type = $("lType").value, q = $("lSearch").value.trim().toLowerCase();
+  let rows = S.ledger.filter(r =>
+    (S.ltab === "all" || r.kind === S.ltab) &&
+    (!agent || r.who === agent || r.to === agent || (r.kind === "msg" && !r.to)) &&  // broadcasts reach everyone
+    (!type || (r.kind === "note" && r.type === type)) &&
+    (!q || [r.text, r.detail, r.task, r.who, r.to, r.type].some(v => v && String(v).toLowerCase().includes(q))));
+  rows.sort((a, b) => a.ts - b.ts || a.id - b.id);
+  if ($("lOrder").value === "desc") rows.reverse();
+  const nNotes = S.ledger.filter(r => r.kind === "note").length;
+  $("lCount").textContent = `${rows.length} shown · ${nNotes} notes · ${S.ledger.length - nNotes} messages`;
+  const list = $("ledgerList"), keep = list.scrollTop; list.textContent = "";
+  if (!rows.length) { list.append(el("div", { class: "empty" }, "Nothing matches.")); return; }
+  for (const r of rows.slice(0, 3000)) {
+    const row = el("div", { class: "lrow" + (r.old ? " old" : "") });
+    const who = el("div", { class: "who", style: "font-weight:700" }, r.who);
+    if (S.agents[r.who]) who.style.color = famColor(r.who);
+    const txt = el("div", { class: "txt" });
+    const k = el("span", { class: "k" });
+    if (r.kind === "note") {
+      k.textContent = r.type + (r.task ? " · " + r.task : "") + (r.old ? " · superseded" : "");
+      k.style.color = css(NOTE_COLOR[r.type] || "--accent");
+    } else {
+      k.textContent = `✉ → ${r.to || "all"}${r.urgent ? " · urgent" : ""}`;
+      k.style.color = css("--warn");
+    }
+    txt.append(k, document.createTextNode(r.text));
+    if (r.detail) txt.append(el("span", { class: "det" }, r.detail));
+    row.append(el("div", { class: "ts mono" }, clock(r.ts)), el("div", { class: "idn mono" }, (r.kind === "note" ? "#" : "m") + r.id), who, txt);
+    list.append(row);
+  }
+  list.scrollTop = keep;
+}
+
+/* ---------- loop ---------- */
+async function poll() {
+  let more = false;
+  try {
+    const q = new URLSearchParams(S.ids);
+    const st = await (await fetch("/api/state?" + q)).json();
+    if (!st.waiting) {
+      setRoster(st.roster);
+      if (st.started_at) S.startedAt = st.started_at;
+      S.spend = Object.fromEntries(st.spend.map(r => [r.agent_id, r]));
+      for (const t of st.tasks) ensurePeer(t.owner);
+      ingest(st);
+      renderTasks(st.tasks);
+      renderAgents();
+      $("ledgerCount").textContent = S.ledger.length;
+      if ($("ledgerDlg").open && (st.notes.length || st.messages.length)) { syncLedgerOptions(); renderLedger(); }
+      more = st.events.length >= 2000 || st.notes.length >= 2000 || st.messages.length >= 2000;
+      if (!more) S.first = false;
+    }
+    S.ended = st.ended;
+    renderHeader(st);
+  } catch (e) { $("status").className = "pill stalled"; $("status").textContent = "view offline"; }
+  setTimeout(poll, more ? 0 : (S.ended ? 5000 : 1000));
+}
+buildFilters();
+setupLedger();
+buildGraph();
+poll();
+</script>
+</body>
+</html>

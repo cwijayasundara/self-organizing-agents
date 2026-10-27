@@ -180,3 +180,45 @@ class BudgetMiddleware(AgentMiddleware):
     @hook_config(can_jump_to=["end"])
     async def aafter_model(self, state, runtime) -> dict[str, Any] | None:
         return self._after(state)
+
+
+class ActivityMiddleware(AgentMiddleware):
+    """Record every tool call (name, short args, outcome) in the ledger's event log for observers."""
+
+    MAX_ARG = 160
+
+    def __init__(self, agent_id: str, ledger: Ledger) -> None:
+        super().__init__()
+        self.agent_id, self.ledger = agent_id, ledger
+
+    def _args(self, call) -> str:
+        parts = []
+        for k, v in (call.get("args") or {}).items():
+            text = " ".join(str(v).split())
+            parts.append(f"{k}={text[:self.MAX_ARG] + '…' if len(text) > self.MAX_ARG else text}")
+        return ", ".join(parts)
+
+    def _record(self, request, result) -> None:
+        if self.ledger.events is None:
+            return
+        call = request.tool_call
+        msg = result if isinstance(result, ToolMessage) else None
+        content = msg.content if msg is not None and isinstance(msg.content, str) else ""
+        error = (msg is not None and msg.status == "error") or content.startswith("ERROR")
+        args = call.get("args") or {}
+        task_id = args.get("task_id") or args.get("review_task_id")
+        detail = f"{call.get('name')}({self._args(call)})"
+        if error:
+            detail += f" -> {' '.join(content.split())[:200]}"
+        self.ledger.events.emit(self.agent_id, "tool_error" if error else "tool", detail,
+                                task_id if isinstance(task_id, str) else None)
+
+    def wrap_tool_call(self, request, handler):
+        result = handler(request)
+        self._record(request, result)
+        return result
+
+    async def awrap_tool_call(self, request, handler):
+        result = await handler(request)
+        self._record(request, result)
+        return result

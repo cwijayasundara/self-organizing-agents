@@ -47,7 +47,10 @@ def make_peer_tools(agent_id: str, family: str, ledger: Ledger) -> list[BaseTool
         return f"OK: wrote note G{note.id}"
 
     def board_grep(query: str) -> str:
-        """Search all board notes (text and detail) with a query when you need earlier evidence."""
+        """Search all board notes (text and detail) when you need earlier evidence.
+
+        Query: words match as substrings; join words with & (and) or | (or), quote exact phrases,
+        e.g. retract & okafor, or "per hour". A bare space between words is an error."""
         found = ledger.board.grep(query)
         out = render_notes(found[-MAX_NOTES:])
         if len(found) > MAX_NOTES:

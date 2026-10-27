@@ -11,6 +11,7 @@ from langgraph.graph.state import CompiledStateGraph
 from agora.config import BudgetSpec, ModelSpec, PeerSpec
 from agora.ledger import Ledger
 from agora.middleware import (
+    ActivityMiddleware,
     BudgetMiddleware,
     HideToolsMiddleware,
     PeerNoticeMiddleware,
@@ -48,6 +49,7 @@ def make_peer(
         TurnStartDeltaMiddleware(peer.id, spec.family, ledger, peer_usd, budget.swarm_usd),
         PeerNoticeMiddleware(peer.id, ledger),
         BudgetMiddleware(peer.id, spec.key, ledger, peer_usd),
+        ActivityMiddleware(peer.id, ledger),
     ]
     if spec.max_prompt_tokens is not None:
         # Same name as deepagents' default, so it replaces that one in place (see _apply_custom_middleware).

@@ -46,8 +46,8 @@ DOSSIER_SUMMARY
   "blocker_country": "<country>",
   "anomaly_segment": "<segment>",
   "undercutting_competitor": "<competitor>",
-  "arith_mismatch_eur": "<number>"
+  "arith_mismatch_eur": <number>
 }
 ```
 
-Field rules: `recommendation` is "enter" or "hold"; `country_order` lists the five candidate countries, best first; `blocker_country`, `anomaly_segment` and `undercutting_competitor` are names taken from the evidence; `arith_mismatch_eur` is a number in EUR. Replace every placeholder with your own finding.
+Field rules: `recommendation` is "enter" or "hold"; `country_order` lists the five candidate countries, best first; `blocker_country`, `anomaly_segment` and `undercutting_competitor` are names taken from the evidence; `arith_mismatch_eur` is a number in EUR, written as a bare JSON number with no quotes (for example 12345). Replace every placeholder with your own finding.

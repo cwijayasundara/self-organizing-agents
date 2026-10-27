@@ -177,3 +177,15 @@ def test_budget_middleware_skips_model_when_exhausted(ledger):
     assert mw.before_model({"messages": []}, None) is None
     ledger.budget.charge("P01", "deepseek", Usage(10_000_000, 0, 0))
     assert mw.before_model({"messages": []}, None) == {"jump_to": "end"}
+
+
+def test_protocol_states_the_real_write_limits():
+    from agora.ledger.board import _CAPS
+    from agora.ledger.mailbox import MAX_TEXT
+    from agora.protocol import PROTOCOL
+    assert f"note text: {_CAPS['FACT']} characters" in PROTOCOL
+    assert f"PATCH_SUMMARY, REVIEW, DISSENT note text: {_CAPS['PATCH_SUMMARY']} characters" in PROTOCOL
+    assert f"DECISION: {_CAPS['DECISION']}" in PROTOCOL
+    assert f"send_dm text: {MAX_TEXT} characters" in PROTOCOL
+    assert _CAPS["FACT"] == _CAPS["OBSERVED"] == _CAPS["FAIL"] == _CAPS["CLAIM"]
+    assert _CAPS["PATCH_SUMMARY"] == _CAPS["REVIEW"] == _CAPS["DISSENT"]

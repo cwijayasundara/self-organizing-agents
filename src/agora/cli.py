@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from agora.domain import build_domain
 from agora.config import ConfigError, load_roster
 from agora.api import run_swarm
 from agora.ledger.types import LedgerError
+from agora.observe import ConsoleTail, LiveServer, setup_logging
 from agora.templates import load_template
 from agora.validators import non_empty
 
@@ -43,7 +45,37 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--db", default=None, help="ledger path (default runs/<run-id>.sqlite)")
     run.add_argument("--run-id", default=None, help="default: UTC timestamp")
     run.add_argument("--domain", default=None, help="domain validators/admission (needs roster data_dir)")
+    _view_args(run)
+    run.add_argument("--watch", action="store_true",
+                     help="serve a live HTML view of the run and open it in the browser")
+    run.add_argument("-v", "--verbose", action="store_true", help="also log every tool call")
+    run.add_argument("-q", "--quiet", action="store_true", help="no progress log, only warnings")
+    watch = sub.add_parser("watch", help="live HTML view of a ledger (a running or a finished run)")
+    watch.add_argument("db", help="ledger path, e.g. runs/<run-id>.sqlite")
+    _view_args(watch)
     return p
+
+
+def _view_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--port", type=int, default=8765, help="live view port (default 8765; any free port if taken)")
+    p.add_argument("--no-browser", action="store_true", help="do not open the live view in a browser")
+
+
+def _wait_for_ctrl_c(message: str) -> None:
+    print(message, file=sys.stderr)
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+
+
+def _watch(args: argparse.Namespace) -> int:
+    if not Path(args.db).exists():
+        raise ConfigError(f"ledger {args.db} does not exist")
+    server = LiveServer(args.db, args.port).start(open_browser=not args.no_browser)
+    _wait_for_ctrl_c(f"serving {args.db} at {server.url} (Ctrl-C to stop)")
+    server.stop()
+    return 0
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -64,7 +96,13 @@ def _run(args: argparse.Namespace) -> int:
     validators, admission = [non_empty()], []
     if args.domain:
         validators, admission = build_domain(args.domain, roster.data_dir)
-    outcome = run_swarm(roster, specs, brief, db_path, validators=validators, admission=admission)
+    setup_logging(-1 if args.quiet else (1 if args.verbose else 0))
+    tail = ConsoleTail(db_path).start()
+    server = LiveServer(db_path, args.port).start(open_browser=not args.no_browser) if args.watch else None
+    try:
+        outcome = run_swarm(roster, specs, brief, db_path, validators=validators, admission=admission)
+    finally:
+        tail.stop()
     result, ledger = outcome.result, outcome.ledger
     tasks = []
     for t in ledger.tasks.list():
@@ -72,7 +110,10 @@ def _run(args: argparse.Namespace) -> int:
         tasks.append({"id": t.id, "kind": t.kind, "required": t.required,
                       "status": t.status, "artifact_id": art.id if art else None})
     print(json.dumps({"run_id": run_id, "db": db_path, **asdict(result), "tasks": tasks},
-                     indent=2, sort_keys=True))
+                     indent=2, sort_keys=True), flush=True)
+    if server is not None:
+        _wait_for_ctrl_c(f"run finished ({result.status}); live view still at {server.url} (Ctrl-C to exit)")
+        server.stop()
     return EXIT_CODES[result.status]
 
 
@@ -85,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as e:  # --help exits 0
         return e.code if isinstance(e.code, int) else 0
     try:
-        return _run(args)
+        return _watch(args) if args.command == "watch" else _run(args)
     except (ConfigError, LedgerError, yaml.YAMLError, OSError) as e:
         print(f"error: {' '.join(str(e).split())}", file=sys.stderr)
         return 1
