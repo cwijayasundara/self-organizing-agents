@@ -438,40 +438,47 @@ This section explains the whole system with pictures. Every diagram is plain tex
 
 ### V14. The EU market-entry task graph (12 required tasks)
 
-Arrows read "feeds into". Each task starts only when everything pointing at it is DONE.
+A layered grid. A task sits one level below the deepest task it needs, and each box lists what it needs (`<-`). A task opens only when everything it needs is DONE.
 
 ```
- LEVEL 0 (all claimable at once)        LEVEL 1                   LEVEL 2            LEVEL 3
-
- sizing -----------------+------------> country_sequence -+
- regulatory --------+----+                                 |
- ops_cost ----------+----+---+                             |
-                    |        |                             |
- sizing ------------+--------+---------> pnl_3yr ----------+---> recommendation --+
- pricing -----------+--------+              (also needs     |                      |
- gtm ---------------+--------+              pricing, gtm,   |                      |
- ops_cost ----------+--------+              ops_cost)       |                      |
-                                                            |                      |
- regulatory --------+                                       |                      |
- competitors -------+------------------> risk_register -----+                      |
- customer_evidence -+                                                              |
-                                                                                   v
- all ten other tasks (every one of the above) ---------------------------------> dossier
-                                                                       (integration task;
-                                                                        DONE = run is done)
+ LEVEL 0   claimable at once, no dependencies
+ +----------+ +------------+ +----------+ +---------+ +-----+ +-------------+ +-------------------+
+ |  sizing  | | regulatory | | ops_cost | | pricing | | gtm | | competitors | | customer_evidence |
+ +----------+ +------------+ +----------+ +---------+ +-----+ +-------------+ +-------------------+
+      |             |             |            |         |          |                  |
+      v             v             v            v         v          v                  v
+ LEVEL 1   needs only level-0 tasks
+ +---------------------------+ +------------------------------+ +-------------------------------+
+ | country_sequence          | | pnl_3yr                      | | risk_register                 |
+ | <- sizing                 | | <- sizing                    | | <- regulatory                 |
+ |    regulatory             | |    pricing                   | |    competitors                |
+ |    ops_cost               | |    gtm                       | |    customer_evidence          |
+ |                           | |    ops_cost                  | |                               |
+ +-------------+-------------+ +--------------+---------------+ +---------------+---------------+
+               |                              |                                 |
+               +------------------------------+---------------------------------+
+                                              v
+ LEVEL 2   needs all of level 1
+                          +-------------------------------------------+
+                          | recommendation                            |
+                          | <- country_sequence, pnl_3yr,             |
+                          |    risk_register                          |
+                          +---------------------+---------------------+
+                                                |
+                                                v
+ LEVEL 3   integration task; when this one is DONE the run is done
+                          +-------------------------------------------+
+                          | dossier                                   |
+                          | <- all eleven other tasks: the 7 level-0, |
+                          |    the 3 level-1 and recommendation       |
+                          +-------------------------------------------+
 ```
 
 ```
- Dependencies, spelled out:
-   country_sequence  <- sizing, regulatory, ops_cost
-   pnl_3yr           <- sizing, pricing, gtm, ops_cost
-   risk_register     <- regulatory, competitors, customer_evidence
-   recommendation    <- country_sequence, pnl_3yr, risk_register
-   dossier           <- all ten other tasks
-
- Longest chain:  sizing -> country_sequence -> recommendation -> dossier
- Every task also spawns review:<task>:<round> tasks when submitted. The graph
- stays a DAG for the whole run (new tasks may depend only on existing ones),
+ Width of the graph: 7 tasks can run in parallel at level 0, 3 at level 1, then 1, then 1.
+ Longest chain:      sizing -> country_sequence -> recommendation -> dossier
+ Each submitted task also spawns review:<task>:<round> tasks, which sit outside this grid.
+ The graph stays a DAG for the whole run (new tasks may depend only on existing ones),
  so dependency deadlock cannot happen.
 ```
 
