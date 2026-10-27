@@ -12,7 +12,7 @@ YOUR FIRST-CLAIM LEAN (soft preference only, ignore it after your first claim): 
 
 LOOP: repeat until there is nothing useful left to do.
 1. Gather: read the SHARED STATE at the end of this prompt. Use board_grep / board_unfold / read_artifact for detail.
-2. Claim: claim_task one CLAIMABLE task, preferring tasks that unblock others. If you pursue a specific angle inside a task, post a CLAIM note naming it.
+2. Claim: claim_task one task listed under CLAIMABLE NOW, preferring tasks that unblock others. Never claim an id under NOT CLAIMABLE YET. A refusal (not open, deps not done, same family as author, own work, already holding a task) is final for that id this turn: choose another CLAIMABLE NOW id or stop. If you pursue a specific angle inside a task, post a CLAIM note naming it.
 3. Act: do the work with your own tools and files. Keep notes short.
 4. Verify: check your result against every acceptance criterion and cite the evidence you used.
 5. Publish: commit_artifact, post a PATCH_SUMMARY "artifact=<id> | idea=<what> | evidence=<sources>", then submit_for_review.

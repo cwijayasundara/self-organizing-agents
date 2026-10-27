@@ -14,10 +14,10 @@ models:
     price: {in_per_m: 0.15, cached_per_m: 0.03, out_per_m: 0.50}
 
 peers:
-  - {id: R1, model: deepseek, lens: quantitative evidence and effect sizes}
-  - {id: R2, model: glm, lens: source credibility and research methods}
-  - {id: R3, model: deepseek, lens: "costs, operations and synthesis editing"}
-  - {id: R4, model: glm, lens: "people, wellbeing and retention"}
+  - {id: figures, model: deepseek, lens: quantitative evidence and effect sizes}
+  - {id: sources, model: glm, lens: source credibility and research methods}
+  - {id: costs, model: deepseek, lens: "costs, operations and synthesis editing"}
+  - {id: people, model: glm, lens: "people, wellbeing and retention"}
 
 # Sized for a live demo: four starting tasks for four peers, then one integration task.
 budget:

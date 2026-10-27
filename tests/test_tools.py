@@ -71,7 +71,8 @@ def test_claim_rejection_carries_reason(ledger):
     ledger.tasks.create_task(spec("A"))
     make_tools_by_name("P01", ledger)["claim_task"].invoke({"task_id": "A"})
     out = make_tools_by_name("P02", ledger)["claim_task"].invoke({"task_id": "A"})
-    assert out.startswith("ERROR:") and "not open" in out
+    assert out.startswith("ERROR:") and "not open: claimed by P01" in out
+    assert "Do not retry A" in out and "Claimable now: (none)" in out
 
 
 def test_authorship_cannot_be_spoofed(ledger):
@@ -112,12 +113,41 @@ def test_every_tool_happy_path(ledger):
     assert "ERROR" in t["read_artifact"].invoke({"task_id": "B"})
 
 
+def test_blocked_task_is_labeled_and_names_its_deps(ledger):
+    ledger.tasks.create_task(spec("A"))
+    ledger.tasks.create_task(spec("B", deps=["A"]))
+    listed = make_tools_by_name("P01", ledger)["list_tasks"].invoke({})
+    assert "not claimable: deps not done: A [open]" in listed
+    out = render_snapshot(ledger, "P01", "deepseek", [], peer_usd=1.0, swarm_usd=5.0)
+    waiting = out[out.index("NOT CLAIMABLE YET"):out.index("CLAIMED BY OTHERS")]
+    assert "B" in waiting and "deps not done: A [open]" in waiting
+    claimable = out[out.index("CLAIMABLE NOW"):out.index("NOT CLAIMABLE YET")]
+    assert "A [open]" in claimable and "B [" not in claimable
+    refused = make_tools_by_name("P01", ledger)["claim_task"].invoke({"task_id": "B"})
+    assert refused.startswith("ERROR: deps not done: A [open]")
+    assert "Do not retry B" in refused and "Claimable now: A" in refused
+
+
+def test_in_review_work_does_not_block_other_claims(ledger):
+    ledger.tasks.create_task(spec("A"))
+    ledger.tasks.create_task(spec("B"))
+    t = make_tools_by_name("P01", ledger)
+    t["claim_task"].invoke({"task_id": "A"})
+    t["commit_artifact"].invoke({"task_id": "A", "content": "z" * 300})
+    t["submit_for_review"].invoke({"task_id": "A"})
+    out = render_snapshot(ledger, "P01", "deepseek", [], peer_usd=1.0, swarm_usd=5.0)
+    claimable = out[out.index("CLAIMABLE NOW"):out.index("NOT CLAIMABLE YET")]
+    assert "B [open]" in claimable
+    assert "already holding" not in out
+
+
 def test_snapshot_empty_sections(ledger):
     out = render_snapshot(ledger, "P01", "deepseek", [], peer_usd=1.0, swarm_usd=5.0)
-    heads = ["YOUR TASKS", "CLAIMABLE NOW", "CLAIMED BY OTHERS", "IN REVIEW", "NEW SINCE YOUR LAST TURN", "BUDGET"]
+    heads = ["YOUR TASKS", "CLAIMABLE NOW", "NOT CLAIMABLE YET", "CLAIMED BY OTHERS", "IN REVIEW",
+             "NEW SINCE YOUR LAST TURN", "BUDGET"]
     idx = [out.index(h) for h in heads]
     assert idx == sorted(idx)
-    assert out.count("(none)") == 5
+    assert out.count("(none)") == 6
     assert "spent $0.00 of $1.00; swarm $0.00 of $5.00" in out
 
 

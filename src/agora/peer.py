@@ -18,6 +18,7 @@ from agora.middleware import (
     TurnStartDeltaMiddleware,
 )
 from agora.protocol import render_protocol
+from agora.profiles import AgentProfileMiddleware
 from agora.tools import make_peer_tools
 
 
@@ -59,10 +60,22 @@ def make_peer(
             trigger=("tokens", spec.max_prompt_tokens),
             keep=compute_summarization_defaults(model)["keep"],
         ))
+    prompt = render_protocol(peer.id, n_peers, peer.lens, brief)
+    tools = make_peer_tools(peer.id, spec.family, ledger)
+    middleware.append(AgentProfileMiddleware(ledger, {
+        "id": peer.id, "model": peer.model, "model_id": spec.id, "provider": spec.provider,
+        "family": spec.family, "lens": peer.lens, "peer_usd": peer_usd,
+        "max_prompt_tokens": spec.max_prompt_tokens, "system_prompt": prompt,
+        "skills": [],
+        "memory": {"private_state_recorded": False,
+                   "description": "Conversation checkpoints and scratch files live in process memory. "
+                                  "Shared board notes and messages are persisted in the ledger."},
+        "data_access": {"path": "/data/", "mode": "read-only"} if data_dir else None,
+    }, tools))
     return create_deep_agent(
         model=model,
-        system_prompt=render_protocol(peer.id, n_peers, peer.lens, brief),
-        tools=make_peer_tools(peer.id, spec.family, ledger),
+        system_prompt=prompt,
+        tools=tools,
         middleware=middleware,
         checkpointer=checkpointer,
         name=peer.id,

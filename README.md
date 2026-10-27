@@ -26,13 +26,13 @@ Prerequisites: Python 3.12 or 3.13 and [uv](https://docs.astral.sh/uv/). The tes
 
 Work through these levels in order; each one costs more than the last.
 
-### 1. Offline unit tests (free, no keys, ~35 s)
+### 1. Offline unit tests (free, no keys, about a minute)
 
 ```
 uv run python -m pytest -q
 ```
 
-Expect about 544 passed and 1 deselected. The suite uses fake models (`tests/fakes.py`) to exercise the ledger (board, leased tasks, artifacts, mail), peers, cross-family review, validators, budgets, the runner's stop conditions, the data-room generator, the scorer and the evaluation harness. Tests marked `live` are skipped by default. Run one area with, for example, `uv run python -m pytest -q tests/test_runner.py`.
+Verified on 2026-10-27: **584 passed, 1 deselected**. The suite uses fake models (`tests/fakes.py`) to exercise the ledger (board, leased tasks, artifacts, mail), peers, cross-family review, validators, budgets, the runner's stop conditions, agent-profile capture and replay, viewer endpoints, final-result selection, the data-room generator, the scorer and the evaluation harness. Tests marked `live` are skipped by default. Run one area with, for example, `uv run python -m pytest -q tests/test_runner.py`.
 
 ### 2. Model smoke check (a few cents, needs keys)
 
@@ -52,13 +52,39 @@ uv run --env-file .env agora run --roster examples/toy_dossier/roster.glm-deepse
 
 Add `--watch` to follow it in the browser (see [Watching a run](#watching-a-run-progress-log-and-live-view)). Exit codes: 0 = done (all required tasks approved), 1 = configuration or usage error, 2 = swarm budget exhausted, 3 = wall-clock timeout, 4 = stalled (no progress). Each run writes its ledger to `runs/<run-id>.sqlite` (change it with `--db` or `--run-id`); open it with `sqlite3` to inspect tasks, artifacts, reviews and mail. `docs/phase3-toy-run.md` records what a good run looks like.
 
-### 4. Live swarm on the evidence-review demo (4 peers, a few minutes, needs the Fireworks key)
+### 4. Live swarm on the evidence-review sample (4 peers, a few minutes, needs the Fireworks key)
 
-The quickest realistic run, sized for demos: a small research question ("should a 600-person firm adopt a four-day week?") over nine short files in `examples/evidence_review/sources/`, with a retracted study, an inflated vendor claim, a subgroup hidden by an overall average and a total that does not add up. Four peers take the four starting tasks (productivity, wellbeing, cost, source credibility) in parallel, review each other across families, and one of them writes the synthesis. The answer key is `examples/evidence_review/gold.json`, outside the evidence room. No data generation step is needed:
+This is the short sample. Corvane Systems, a 600-person firm, must choose `adopt_company_wide`, `pilot_knowledge_teams`, or `do_not_adopt` for a four-day week. Nine files in `examples/evidence_review/sources/` hold the evidence, including a retracted study, an inflated vendor claim, a subgroup hidden by an overall average, and a cost total that does not add up. No data-generation step is needed.
+
+Four peers claim the four starting tasks in parallel. `figures` and `costs` run on DeepSeek; `sources` and `people` run on GLM. The tasks are productivity, source credibility, cost and operations, and wellbeing and retention. A peer from the other model family reviews each artifact. When those four are approved, one peer writes the synthesis memo. Budget is $0.60 and 480 seconds. A finished sample is usually a few minutes and under $0.30.
+
+From the repo root, with `FIREWORKS_API_KEY` set in `.env`:
 
 ```
-uv run --env-file .env agora run --roster examples/evidence_review/roster.yaml --template examples/evidence_review/template.yaml --brief examples/evidence_review/brief.md --domain evidence_review --watch
+uv run --env-file .env agora run \
+  --roster examples/evidence_review/roster.yaml \
+  --template examples/evidence_review/template.yaml \
+  --brief examples/evidence_review/brief.md \
+  --domain evidence_review \
+  --watch
 ```
+
+`--domain evidence_review` checks citations and the `RESEARCH_SUMMARY` block. `--watch` opens the live view. Leave it off for a terminal-only run. `--no-browser` serves the page without opening it. `--port` changes the port (default 8765).
+
+While it runs, stderr is the progress log: episodes, claims, board notes, reviews, and spend. Stdout stays the final status JSON. Exit codes: 0 done, 1 configuration or usage error, 2 budget exhausted, 3 wall-clock timeout, 4 stalled.
+
+When the status is `done`, stderr then prints two blocks:
+
+- `======== problem ========` is the brief the peers were given.
+- `======== final output: synthesis@vN (...) ========` is the research memo, including the `RESEARCH_SUMMARY` JSON. `N` is the version that passed review.
+
+The live view shows the same pair in a **Result** panel at the top. Click a task card to read a section artifact. The page stays up until you press Ctrl-C. The ledger is `runs/<run-id>.sqlite`. Reopen it with:
+
+```
+uv run agora watch runs/<run-id>.sqlite
+```
+
+The answer key is `examples/evidence_review/gold.json`, outside the evidence room. Compare its five fields with the memo's `RESEARCH_SUMMARY` block. `docs/phase6-evidence-review-runs.md` records earlier runs. A ledger written before the Result panel existed still shows the memo; the problem side says the brief was not stored.
 
 ### 5. Live swarm on the EU market-entry example (10 peers, needs the Fireworks key)
 
@@ -76,7 +102,7 @@ uv run --env-file .env agora run --roster examples/eu_market_entry/roster.yaml -
 
 ### Watching a run: progress log and live view
 
-`agora run` prints a progress log to stderr while it works (the final JSON result still goes to stdout). Each line is one thing the swarm did: an episode starting, a board note, a direct message, a task being claimed, submitted, sent back or approved, a refused tool call, a runner nudge or budget warning, and the spend every $0.10. Add `-v` to also log every tool call, or `-q` to show warnings only.
+`agora run` prints a progress log to stderr while it works (the final JSON result still goes to stdout). Each line is one thing the swarm did: an episode starting, a board note, a direct message, a task being claimed, submitted, sent back or approved, a refused tool call, a runner nudge or budget warning, and the spend every $0.10. Add `-v` to also log every tool call, or `-q` to show warnings only. `-q` still prints the problem and the final artifact once the status is `done`.
 
 Add `--watch` to open a live view of the swarm in your browser:
 
@@ -87,8 +113,9 @@ uv run --env-file .env agora run --roster examples/eu_market_entry/roster.yaml -
 The page (http://127.0.0.1:8765 by default; `--port` changes it, `--no-browser` skips opening it) shows:
 
 - **Swarm graph**: the peers around the shared ledger, colored by model family. A dashed spinning ring means the agent is in an episode. Animated dots show notes going to the board, tasks being claimed, reviews (green for approve, red for reject) and direct messages between peers.
+- **Result**: once the run is `done`, the brief and the final artifact. That is the integration task when the template has one (the evidence-review memo, or the toy dossier's `summary`), and otherwise the latest artifact of each required task. The same text is printed to stderr after the status JSON.
 - **Task board**: open, claimed, in-review and done tasks, with each task's owner and the tasks it is waiting on. Click a card to read its latest artifact.
-- **Agents**: each peer's state, held task, episode count, spend and last action. Click a row (or a node) to filter the activity feed to that agent.
+- **Agents**: each peer's state, held task, episode count, spend and last action. Click a row (or a graph node) to open its details: model, lens, budget, token usage, system prompt, tool descriptions and input schemas, skills, memory and data access. Use **Filter activity** in the dialog to scope the feed; **Clear filter** restores all agents.
 - **Activity feed**: notes, messages, coordination tool calls, episodes and runner actions, newest first, with category filters. Other tool calls, such as file reads, are hidden until you turn them on.
 
 When the run finishes, the page stays up until you press Ctrl-C. To watch a run that is going in another terminal, or to replay a finished one, point `agora watch` at its ledger:
@@ -98,6 +125,31 @@ uv run agora watch runs/<run-id>.sqlite
 ```
 
 Both read the SQLite ledger through a separate read-only connection, so watching never affects the agents. Runner and tool activity is recorded in an `events` table of the ledger that peers never read. Ledgers written before that table existed still show tasks, notes and messages, but no episodes or tool calls.
+
+#### Inspecting an agent
+
+Click an agent's graph node or table row to open its details. Graph nodes and rows also support Enter and Space; Escape closes the dialog.
+
+| Section | What it shows |
+|---|---|
+| Overview | Model, provider and family, lens, status, owned tasks, episode count, spend and peer budget, input/output token totals and prompt token limit. Live values update while the dialog is open. |
+| System prompt | The effective system prompt captured at the first model call, with the configured protocol available separately. Before that call, only the configured protocol is shown. |
+| Tools | Tool names, descriptions and JSON input schemas. Before the first model call, this lists configured ledger tools; afterward it includes the built-in tools available to the model. The hidden `task` delegation tool is excluded. |
+| Skills | **None configured** for agents built by the current peer builder. |
+| Memory and data access | How private state is stored, whether it is recorded, and the optional read-only `/data/` mount. |
+| Shared memory | All shared board notes, plus messages sent by or addressed to this agent and broadcasts. Each list shows the latest 100 entries; the Ledger dialog provides the full loaded history. |
+
+Use **Filter activity** inside the dialog to scope the feed. Use **Clear activity filter** there or **Clear filter** beside the feed heading to restore all agents.
+
+New runs save agent configuration in `agent_profiles`, then capture the effective prompt and tool list at the first model call. Reopen the dialog to refresh that snapshot. This is a first-call snapshot, not a transcript or a view of the agent's current context. Private conversation checkpoints and scratch files remain in process memory and are not recorded for replay.
+
+The viewer reads these details through `GET /api/agent?id=<agent-id>`. It polls `GET /api/state` for activity, tasks, spend, the stored brief and selected final artifacts; task cards use `GET /api/artifact?task=<task-id>`. These endpoints use read-only ledger connections.
+
+#### Replaying runs and older ledgers
+
+New runs also store the original brief in `run_meta`; the Result panel combines it with artifacts already stored in the ledger. Integration tasks are selected as the final deliverables when present; otherwise required non-review tasks are selected. The panel appears after a `done` run. It does not generate a new answer or call a model.
+
+Older ledgers still show their available tasks, artifacts, notes and messages. Missing agent configuration is labeled **Not recorded**, and a missing stored brief is labeled explicitly in the Result panel. Opening an old ledger does not reconstruct missing metadata. Restart an already-running viewer after upgrading the code, then reload the page; start a new run to capture the new metadata.
 
 ### 6. Evaluation harness (compares arms at equal budget)
 
@@ -109,11 +161,11 @@ GLM 5.3 Flash and DeepSeek V4.1 Flash are the default pair: cheap, and two model
 
 ## Design
 
-The design report is in `reports/Supervisorless self organizing agents.md`. The record of the first live run is in `docs/phase3-toy-run.md`.
+The current implementation and evidence are described in [architecture.md](architecture.md). The original design report is in `reports/Supervisorless self organizing agents.md`. The record of the first live run is in `docs/phase3-toy-run.md`.
 
 ## EU market-entry example and evaluation
 
-`examples/eu_market_entry/` holds a 10-agent dossier task (brief, 12-task template, roster) over a synthetic data room with planted facts. Generate the data room for each variant you evaluate (see step 4 of [Testing the framework](#testing-the-framework)); `eval.yaml` reads rooms from `data/eu/v<N>` and keys from `data/eu_gold/v<N>.json`:
+`examples/eu_market_entry/` holds a 10-agent dossier task (brief, 12-task template, roster) over a synthetic data room with planted facts. Generate the data room for each variant you evaluate (see step 5 of [Testing the framework](#testing-the-framework)); `eval.yaml` reads rooms from `data/eu/v<N>` and keys from `data/eu_gold/v<N>.json`:
 
 ```
 uv run python scripts/make_dataroom.py --variant 0 --out data/eu/v0 --gold data/eu_gold/v0.json

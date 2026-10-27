@@ -37,6 +37,48 @@ def test_reader_waits_for_missing_ledger(tmp_path):
     assert LedgerReader(str(tmp_path / "nope.sqlite")).state() == {"waiting": True}
 
 
+async def test_agent_profile_records_configuration_and_effective_model_request(ledger, tmp_path):
+    model = ScriptedChatModel()
+    peer = peer_for(model, ledger, data_dir=str(tmp_path))
+    reader = LedgerReader(_db(ledger))
+    profile = reader.agent("P01")
+    assert profile["id"] == "P01" and profile["model"] == "deepseek"
+    assert "Test brief" in profile["system_prompt"]
+    assert profile["skills"] == []
+    assert profile["memory"]["private_state_recorded"] is False
+    assert profile["data_access"] == {"path": "/data/", "mode": "read-only"}
+    assert profile["effective_system_prompt"] is None
+    await peer.ainvoke({"messages": [("user", "go")]}, cfg("P01"))
+    profile = reader.agent("P01")
+    assert profile["effective_system_prompt"] == model.seen[0][0].content
+    tools = {t["name"]: t for t in profile["tools"]}
+    assert set(tools) == set(model.bound_tools[-1])
+    assert "task" not in tools and "read_file" in tools
+    assert tools["claim_task"]["description"]
+    assert tools["claim_task"]["parameters"]["properties"]["task_id"]["type"] == "string"
+    first_prompt = profile["effective_system_prompt"]
+    await peer.ainvoke({"messages": [("user", "next episode")]}, cfg("P01"))
+    # Independent read-only connections can replay this after the peer is gone.
+    replay = LedgerReader(_db(ledger)).agent("P01")
+    assert replay["effective_system_prompt"] == first_prompt
+    assert "next episode" not in json.dumps(replay)
+
+
+def test_agent_profile_legacy_and_missing(ledger):
+    ledger.events.emit("runner", "run_start", json.dumps({"peers": [
+        {"id": "P01", "model": "old-model", "family": "old-family", "lens": "research"}]}))
+    # A watch process must also work with databases created before profile recording.
+    with ledger.db.write() as conn:
+        conn.execute("DROP TABLE IF EXISTS agent_profiles")
+    reader = LedgerReader(_db(ledger))
+    assert reader.agent("P01") == {
+        "id": "P01", "model": "old-model", "family": "old-family", "lens": "research",
+        "recorded": False,
+    }
+    assert reader.agent("missing") is None
+    assert reader.agent("P01' OR 1=1 --") is None
+
+
 def test_reader_is_incremental(ledger):
     ledger.events.emit("runner", "run_start", json.dumps({"run_name": "r", "peers": [], "swarm_usd": 1,
                                                           "wall_clock_s": 9}))
@@ -76,6 +118,8 @@ def test_console_tail_logs_coordination(ledger, caplog):
         ledger.mail.send("P01", None, "anyone has prices?", urgent=True)
         ledger.events.emit("P02", "tool_error", "board_write(type=FACT, text=" + "x" * 400
                            + ") -> ERROR: FACT text is 536 chars; the cap is 100")
+        ledger.events.emit("P02", "claim_refused",
+                           "claim_task(task_id=T1) -> ERROR: not open: claimed by P01")
         tail.poll()
     finally:
         logging.getLogger("agora").removeHandler(caplog.handler)
@@ -86,17 +130,27 @@ def test_console_tail_logs_coordination(ledger, caplog):
     assert "T1 (Task T1) claimed by P01" in text
     assert "list_tasks" not in text
     assert "-> ERROR: FACT text is 536 chars; the cap is 100" in text  # long args never hide the reason
+    assert "⚠  claim_task" not in text  # a lost claim is not a progress-log warning
 
 
 def test_live_server_endpoints(ledger):
+    peer_for(ScriptedChatModel(), ledger)
     ledger.tasks.claim("T1", "P01", "fa")
     ledger.artifacts.commit("T1", "P01", "# result")
     server = LiveServer(_db(ledger), port=0).start(open_browser=False)
     try:
         page = urllib.request.urlopen(server.url).read().decode()
-        assert "agora live view" in page
+        assert "agora live view" in page and 'id="result"' in page
         state = json.loads(urllib.request.urlopen(server.url + "api/state?notes=0").read())
         assert state["tasks"][0]["owner"] == "P01"
+        assert state["brief"] is None
+        assert state["final"] == [{"task_id": "T1", "title": "Task T1", "id": "T1@v1",
+                                   "author": "P01", "content": "# result"}]
+        profile = json.loads(urllib.request.urlopen(server.url + "api/agent?id=P01").read())
+        assert profile["recorded"] is True and "Test brief" in profile["system_prompt"]
+        with pytest.raises(urllib.error.HTTPError) as missing:
+            urllib.request.urlopen(server.url + "api/agent?id=missing")
+        assert missing.value.code == 404
         art = json.loads(urllib.request.urlopen(server.url + "api/artifact?task=T1").read())
         assert art["content"] == "# result" and art["id"] == "T1@v1"
         with pytest.raises(urllib.error.HTTPError):
@@ -133,6 +187,17 @@ async def test_tool_calls_are_recorded(ledger):
         ("P01", "tool", "T1"), ("P01", "tool_error", "nope")]
     assert tools[0].detail == "claim_task(task_id=T1)"
     assert tools[1].detail.startswith("claim_task(task_id=nope) -> ERROR")
+
+
+async def test_lost_claim_is_recorded_as_a_refusal(ledger):
+    ledger.tasks.claim("T1", "P02", "fb")
+    model = ScriptedChatModel(script=[tool_call("claim_task", {"task_id": "T1"}), AIMessage("done")])
+    await peer_for(model, ledger).ainvoke({"messages": [("user", "go")]}, cfg("P01"))
+    kinds = [e.kind for e in ledger.events.since() if e.actor == "P01" and e.kind in
+             ("tool", "tool_error", "claim_refused")]
+    assert kinds == ["claim_refused"]
+    detail = next(e.detail for e in ledger.events.since() if e.kind == "claim_refused")
+    assert "not open: claimed by P02" in detail and "Claimable now: (none)" in detail
 
 
 def test_cli_watch_missing_ledger(tmp_path, capsys):

@@ -16,6 +16,7 @@ from agora.config import ConfigError, load_roster
 from agora.api import run_swarm
 from agora.ledger.types import LedgerError
 from agora.observe import ConsoleTail, LiveServer, setup_logging
+from agora.result import final_output_text
 from agora.templates import load_template
 from agora.validators import non_empty
 
@@ -111,6 +112,8 @@ def _run(args: argparse.Namespace) -> int:
                       "status": t.status, "artifact_id": art.id if art else None})
     print(json.dumps({"run_id": run_id, "db": db_path, **asdict(result), "tasks": tasks},
                      indent=2, sort_keys=True), flush=True)
+    if result.status == "done":
+        print(final_output_text(ledger, brief), file=sys.stderr, flush=True)
     if server is not None:
         _wait_for_ctrl_c(f"run finished ({result.status}); live view still at {server.url} (Ctrl-C to exit)")
         server.stop()

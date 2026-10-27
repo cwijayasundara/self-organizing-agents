@@ -7,7 +7,7 @@ from langchain_core.tools import BaseTool, tool
 
 from agora.ledger import Ledger
 from agora.ledger.grep_query import QueryError
-from agora.ledger.types import LedgerError, Task, TaskSpec
+from agora.ledger.types import ClaimRejected, LedgerError, Task, TaskSpec
 from agora.render import note_line, render_notes, task_line, wrap_block, wrap_lines
 
 
@@ -64,15 +64,28 @@ def make_peer_tools(agent_id: str, family: str, ledger: Ledger) -> list[BaseTool
         return wrap_block("\n".join(lines))
 
     def list_tasks() -> str:
-        """List every task with its status and owner to decide what to claim or wait on."""
+        """List every task with its status. A line marked 'not claimable' cannot be claimed by you."""
         tasks = ledger.tasks.list()
         if not tasks:
             return "(none)"
-        return wrap_lines([task_line(t, True) for t in tasks])
+        holding = bool(ledger.tasks.held_by(agent_id))
+        lines = []
+        for t in tasks:
+            reason = ledger.tasks.unavailable_reason(t, agent_id, family, holding=holding)
+            suffix = f" — not claimable: {reason}" if reason else ""
+            lines.append(task_line(t, True) + suffix)
+        return wrap_lines(lines)
 
     def claim_task(task_id: str) -> str:
-        """Claim an open, unblocked task so you can work on it; you may hold only one task at a time."""
-        t = ledger.tasks.claim(task_id, agent_id, family)
+        """Claim one task listed under CLAIMABLE NOW. You may hold only one task at a time.
+
+        Do not pass an id marked not claimable. If this is refused, do not retry that id this turn."""
+        try:
+            t = ledger.tasks.claim(task_id, agent_id, family)
+        except ClaimRejected as e:
+            nxt = [x.id for x in ledger.tasks.claimable(agent_id, family)]
+            choices = ", ".join(nxt) if nxt else "(none)"
+            raise LedgerError(f"{e}. Do not retry {task_id} this turn. Claimable now: {choices}")
         return f"OK: claimed {t.id}\n{_task_detail(t)}"
 
     def renew_task(task_id: str) -> str:

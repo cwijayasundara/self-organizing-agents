@@ -7,7 +7,7 @@ A demo-sized example to replace the EU market-entry run for live showings. The E
 - Example: `examples/evidence_review/` (brief, 5-task template, 4-peer roster, answer key `gold.json` outside the evidence room).
 - Evidence room: `examples/evidence_review/sources/`, nine short static files (three studies, a retraction notice, a vendor white paper, a news article, a staff survey and a cost sheet). No generation step.
 - Planted findings: a retracted study (`studies/okafor_lind_2024.md`) still cited by the news article, a vendor headline (+40%) that its own table contradicts (+4.1%), a subgroup (customer-support shift staff, -8.7%) hidden by an overall +0.0%, and a cost total that is 72,000 EUR short of its line items.
-- Peers: R1 and R3 DeepSeek V4.1 Flash, R2 and R4 GLM 5.3 Flash. Budget $0.60, 480 s wall clock, `stagger_s` 3, `idle_poll_s` 6, `stall_after_s` 150.
+- Peers: R1 and R3 DeepSeek V4.1 Flash, R2 and R4 GLM 5.3 Flash. The roster now calls the same four seats `figures`, `sources`, `costs`, and `people`. Budget $0.60, 480 s wall clock, `stagger_s` 3, `idle_poll_s` 6, `stall_after_s` 150. The table below keeps the ids those runs actually used.
 - Command:
   `uv run --env-file .env agora run --roster examples/evidence_review/roster.yaml --template examples/evidence_review/template.yaml --brief examples/evidence_review/brief.md --domain evidence_review --run-id evr<N>`
 

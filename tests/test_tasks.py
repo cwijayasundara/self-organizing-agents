@@ -8,7 +8,7 @@ from conftest import spec
 
 def test_claim_respects_deps(ledger):
     ledger.tasks.create_task(spec("A")); ledger.tasks.create_task(spec("B", deps=["A"]))
-    with pytest.raises(ClaimRejected, match="deps not done"):
+    with pytest.raises(ClaimRejected, match=r"deps not done: A \[open\]"):
         ledger.tasks.claim("B", "P01", "deepseek")
     assert [t.id for t in ledger.tasks.claimable("P01", "deepseek")] == ["A"]
 
@@ -96,7 +96,7 @@ def test_claim_rejection_reasons(ledger):
         ledger.tasks.claim("nope", "P01", "f")
     ledger.tasks.create_task(spec("A"))
     ledger.tasks.claim("A", "P01", "f")
-    with pytest.raises(ClaimRejected, match="^not open$"):
+    with pytest.raises(ClaimRejected, match="^not open: claimed by P01$"):
         ledger.tasks.claim("A", "P02", "g")
 
 

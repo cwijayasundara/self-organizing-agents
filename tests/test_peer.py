@@ -43,7 +43,7 @@ async def test_system_message_stable_across_calls(ledger):
     ledger.board.write_note("P02", "FACT", "new fact between episodes")
     await peer.ainvoke({"messages": [("user", "again")]}, config=cfg("P01"))
     systems = {str(call_[0].content) for call_ in model.seen}
-    assert len(systems) == 1 and "CLAIMABLE NOW" not in next(iter(systems))
+    assert len(systems) == 1 and "YOUR TASKS" not in next(iter(systems))
     prior = model.seen[-2]
     latest = model.seen[-1]  # earlier messages are a prefix of later ones
     assert [m.content for m in latest[:len(prior)]] == [m.content for m in prior]
@@ -187,5 +187,7 @@ def test_protocol_states_the_real_write_limits():
     assert f"PATCH_SUMMARY, REVIEW, DISSENT note text: {_CAPS['PATCH_SUMMARY']} characters" in PROTOCOL
     assert f"DECISION: {_CAPS['DECISION']}" in PROTOCOL
     assert f"send_dm text: {MAX_TEXT} characters" in PROTOCOL
+    assert "Never claim an id under NOT CLAIMABLE YET" in PROTOCOL
+    assert "is final for that id this turn" in PROTOCOL
     assert _CAPS["FACT"] == _CAPS["OBSERVED"] == _CAPS["FAIL"] == _CAPS["CLAIM"]
     assert _CAPS["PATCH_SUMMARY"] == _CAPS["REVIEW"] == _CAPS["DISSENT"]

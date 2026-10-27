@@ -54,6 +54,7 @@ async def arun_swarm(
         admission=admission,
     )
     seed_tasks(ledger, specs)
+    ledger.meta.put("brief", brief)
     checkpointer = InMemorySaver()
     peers = {
         p.id: make_peer(

@@ -74,7 +74,18 @@ CREATE TABLE IF NOT EXISTS spend (
     created_at REAL NOT NULL
 );
 
+-- Observability only. Peers never read these tables.
+CREATE TABLE IF NOT EXISTS run_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- Observability only: runner and tool activity for logs and the live view. Peers never read it.
+CREATE TABLE IF NOT EXISTS agent_profiles (
+    agent_id TEXT PRIMARY KEY,
+    detail TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor TEXT NOT NULL,

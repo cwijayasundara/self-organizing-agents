@@ -17,6 +17,24 @@ _DEPS_DONE = (
     "WHERE d.task_id=tasks.id AND t.status<>'done')"
 )
 
+# ClaimRejected texts that mean "this call lost", not "the tool broke".
+# A refusal may append detail after the prefix ("not open: claimed by P01").
+CLAIM_CONTENTION_PREFIXES = (
+    "not open",
+    "deps not done",
+    "already holding a task",
+    "own work",
+    "same family as author",
+)
+
+
+def is_claim_contention(text: str) -> bool:
+    """True when a claim_task result is an expected refusal, not a broken call."""
+    body = text.strip()
+    if body.startswith("ERROR:"):
+        body = body[6:].strip()
+    return any(body.startswith(prefix) for prefix in CLAIM_CONTENTION_PREFIXES)
+
 
 def _title_key(title: str) -> str:
     return " ".join(title.lower().split())
@@ -155,14 +173,43 @@ class TaskLedger:
             return self.get(task_id)
         raise ClaimRejected(self._rejection_reason(task_id, agent_id))
 
+    def unfinished_deps(self, task_id: str) -> list[tuple[str, str]]:
+        """Dependencies that are not done, as (id, status), in insertion order."""
+        rows = self.db.read(
+            "SELECT t.id, t.status FROM task_deps d JOIN tasks t ON t.id=d.dep_id "
+            "WHERE d.task_id=? AND t.status<>'done' ORDER BY d.rowid",
+            (task_id,),
+        )
+        return [(r["id"], r["status"]) for r in rows]
+
+    def unavailable_reason(self, task: Task, agent_id: str, family: str, *, holding: bool) -> str | None:
+        """Why this open task is absent from claimable(), or None when this agent may claim it.
+
+        `holding` is whether the agent already has a claimed task. Pass it in so a
+        listing does not re-query once per task.
+        """
+        if task.status != "open":
+            return None
+        review = self._review_claim_rejection(task, agent_id, family)
+        if review is not None:
+            return review
+        blocked = self.unfinished_deps(task.id)
+        if blocked:
+            return "deps not done: " + ", ".join(f"{dep} [{status}]" for dep, status in blocked)
+        if holding:
+            return "already holding a task"
+        return None
+
     def _rejection_reason(self, task_id: str, agent_id: str) -> str:
-        rows = self.db.read("SELECT status FROM tasks WHERE id=?", (task_id,))
+        rows = self.db.read("SELECT status, owner FROM tasks WHERE id=?", (task_id,))
         if not rows:
             return "unknown task"
-        if rows[0]["status"] != "open":
-            return "not open"
-        if self.db.read(f"SELECT 1 FROM tasks WHERE id=? AND NOT {_DEPS_DONE}", (task_id,)):
-            return "deps not done"
+        status, owner = rows[0]["status"], rows[0]["owner"]
+        if status != "open":
+            return f"not open: {status} by {owner}" if owner else f"not open: {status}"
+        blocked = self.unfinished_deps(task_id)
+        if blocked:
+            return "deps not done: " + ", ".join(f"{dep} [{st}]" for dep, st in blocked)
         return "already holding a task"
 
     def _require_owner(self, task_id: str, agent_id: str) -> Task:

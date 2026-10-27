@@ -16,6 +16,8 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from agora.result import choose_final_tasks
+
 log = logging.getLogger("agora")
 
 POLL_S = 1.0
@@ -63,11 +65,14 @@ class LedgerReader:
                                      "ORDER BY id DESC LIMIT 1")
             end = self._rows(conn, "SELECT detail, created_at FROM events WHERE kind='run_end' "
                                    "ORDER BY id DESC LIMIT 1")
+            brief_rows = self._rows(conn, "SELECT value FROM run_meta WHERE key='brief'")
             return {
                 "waiting": False,
                 "roster": json.loads(first[0]["detail"]) if first else None,
                 "started_at": first[0]["created_at"] if first else None,
                 "ended": {"status": end[0]["detail"], "at": end[0]["created_at"]} if end else None,
+                "brief": brief_rows[0]["value"] if brief_rows else None,
+                "final": self._final(conn, tasks),
                 "tasks": tasks,
                 "spend": spend,
                 "notes": self._rows(conn, "SELECT id, author, type, text, task_id, detail, created_at, invalidated "
@@ -79,6 +84,39 @@ class LedgerReader:
             }
         finally:
             conn.close()
+
+    def agent(self, agent_id: str) -> dict | None:
+        """Recorded profile, or the original roster entry for an older ledger."""
+        conn = self._connect()
+        if conn is None:
+            return None
+        try:
+            rows = self._rows(conn, "SELECT detail FROM agent_profiles WHERE agent_id=?", (agent_id,))
+            if rows:
+                return json.loads(rows[0]["detail"])
+            starts = self._rows(conn, "SELECT detail FROM events WHERE kind='run_start' ORDER BY id DESC LIMIT 1")
+            peers = json.loads(starts[0]["detail"]).get("peers", []) if starts else []
+            for peer in peers:
+                if peer["id"] == agent_id:
+                    return {**peer, "recorded": False}
+            # Old ledgers without roster events can still identify active peers.
+            known = self._rows(conn, "SELECT author FROM notes WHERE author=? LIMIT 1", (agent_id,))
+            known += self._rows(conn, "SELECT actor FROM events WHERE actor=? LIMIT 1", (agent_id,))
+            return {"id": agent_id, "recorded": False} if known else None
+        finally:
+            conn.close()
+
+    def _final(self, conn: sqlite3.Connection, tasks: list[dict]) -> list[dict]:
+        chosen = []
+        for task in choose_final_tasks(tasks):
+            rows = self._rows(conn, "SELECT id, task_id, author, version, content FROM artifacts "
+                                    "WHERE task_id=? ORDER BY version DESC LIMIT 1", (task["id"],))
+            if not rows:
+                continue
+            art = rows[0]
+            chosen.append({"task_id": task["id"], "title": task["title"], "id": art["id"],
+                           "author": art["author"], "content": art["content"]})
+        return chosen
 
     def artifact(self, task_id: str) -> dict | None:
         conn = self._connect()
@@ -169,6 +207,8 @@ class ConsoleTail:
             return logging.WARNING, f"{actor:<7} ✗  episode failed: {_short(detail)}"
         if kind == "tool":
             return logging.DEBUG, f"{actor:<7} 🔧 {_short(detail)}"
+        if kind == "claim_refused":  # expected: another peer won, or the task is still blocked
+            return logging.DEBUG, f"{actor:<7} ·  {_short(detail, 220)}"
         if kind == "tool_error":  # keep the error readable: shorten the call, not the reason
             call, _, error = (detail or "").partition(" -> ")
             return logging.INFO, f"{actor:<7} ⚠  {_short(call, 90)} -> {_short(error, 220)}"
@@ -244,6 +284,9 @@ def _handler(reader: LedgerReader):
                 if url.path == "/api/artifact":
                     art = reader.artifact(q.get("task", ""))
                     return self._send(200 if art else 404, json.dumps(art).encode(), "application/json")
+                if url.path == "/api/agent":
+                    agent = reader.agent(q.get("id", ""))
+                    return self._send(200 if agent else 404, json.dumps(agent).encode(), "application/json")
                 return self._send(404, b"not found", "text/plain")
             except (ValueError, sqlite3.Error) as e:
                 return self._send(500, json.dumps({"error": str(e)}).encode(), "application/json")

@@ -15,6 +15,7 @@ from langgraph.types import Command
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agora.ledger import Ledger
+from agora.ledger.tasks import is_claim_contention
 from agora.ledger.types import Usage
 from agora.render import render_notes, render_snapshot, wrap_lines
 
@@ -207,10 +208,16 @@ class ActivityMiddleware(AgentMiddleware):
         error = (msg is not None and msg.status == "error") or content.startswith("ERROR")
         args = call.get("args") or {}
         task_id = args.get("task_id") or args.get("review_task_id")
-        detail = f"{call.get('name')}({self._args(call)})"
+        name = call.get("name")
+        detail = f"{name}({self._args(call)})"
         if error:
             detail += f" -> {' '.join(content.split())[:200]}"
-        self.ledger.events.emit(self.agent_id, "tool_error" if error else "tool", detail,
+        # A lost or early claim is the ledger working. Keep it out of the warning log.
+        if error and name == "claim_task" and is_claim_contention(content):
+            kind = "claim_refused"
+        else:
+            kind = "tool_error" if error else "tool"
+        self.ledger.events.emit(self.agent_id, kind, detail,
                                 task_id if isinstance(task_id, str) else None)
 
     def wrap_tool_call(self, request, handler):

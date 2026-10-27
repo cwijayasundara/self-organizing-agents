@@ -59,11 +59,19 @@ def render_snapshot(
     others = [t for t in tasks if t.status == "claimed" and t.owner != agent_id]
     in_review = [t for t in tasks if t.status == "in_review"]
     claimable = ledger.tasks.claimable(agent_id, family)
+    # in_review work does not count: the claim guard only blocks a task in status claimed.
+    holding = any(t.status == "claimed" for t in mine)
+    waiting = []
+    for t in tasks:
+        reason = ledger.tasks.unavailable_reason(t, agent_id, family, holding=holding)
+        if reason is not None:
+            waiting.append(f"{task_line(t)} — {reason}")
     budget = (f"spent ${ledger.budget.spent(agent_id):.2f} of ${peer_usd:.2f}; "
               f"swarm ${ledger.budget.spent():.2f} of ${swarm_usd:.2f}")
     return "\n\n".join([
         _section("YOUR TASKS", [task_line(t) for t in mine]),
         _section("CLAIMABLE NOW", [task_line(t) for t in claimable]),
+        _section("NOT CLAIMABLE YET", waiting),
         _section("CLAIMED BY OTHERS", [task_line(t, True) for t in others]),
         _section("IN REVIEW", [task_line(t, True) for t in in_review]),
         f"NEW SINCE YOUR LAST TURN\n{render_notes(delta) if delta else '(none)'}",

@@ -110,7 +110,17 @@
   dialog header { position: static; }
   dialog .body { padding: 14px 18px; overflow-y: auto; max-height: calc(86vh - 56px); }
   dialog pre { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
-               padding: 12px; font-size: 12px; }
+               padding: 12px; font-size: 12px; overflow-wrap: anywhere; }
+  .peer { cursor: pointer; }
+  .peer:focus .body { stroke-width: 4; }
+  .agents tr:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #agentDlg .body h2 { font-size: 14px; margin: 18px 0 8px; }
+  #agentDlg details { border-top: 1px solid var(--line); padding: 10px 0; }
+  #agentDlg summary { cursor: pointer; font-weight: 600; }
+  #agentDlg .muted { color: var(--muted); }
+  #agentOverview { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 16px; }
+  #agentOverview dt { color: var(--muted); } #agentOverview dd { margin: 0; overflow-wrap: anywhere; }
+  #agentMemory pre { max-height: 220px; overflow-y: auto; }
   .ledger-btn { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 7px;
                 padding: 4px 11px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
   .ledger-btn:hover { border-color: var(--accent); }
@@ -136,6 +146,13 @@
   #ledgerList { max-height: calc(86vh - 120px); overflow-y: auto; }
   dialog button { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--text);
                   border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  #result { margin: 14px 18px 0; }
+  #result .split { display: grid; grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.4fr); gap: 14px; padding: 12px 14px; }
+  @media (max-width: 980px) { #result .split { grid-template-columns: 1fr; } }
+  #result h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  #result pre { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+                padding: 12px; font-size: 12.5px; max-height: 70vh; overflow: auto; margin: 0 0 10px; }
+  #result .who { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
 </style>
 </head>
 <body>
@@ -152,6 +169,11 @@
     <div class="metric"><b id="mTools">0</b><small>tool calls</small></div>
   </div>
 </header>
+
+<section id="result" hidden>
+  <h2>Result <span class="sp"></span><span style="text-transform:none;letter-spacing:0">the problem and the final artifact</span></h2>
+  <div id="resultBody"></div>
+</section>
 
 <main>
   <div class="col">
@@ -174,7 +196,7 @@
   </div>
   <div class="col">
     <section>
-      <h2>Agents</h2>
+      <h2>Agents <span class="sp"></span><span style="text-transform:none;letter-spacing:0">click an agent for details</span></h2>
       <table class="agents"><thead><tr><th>agent</th><th>state</th><th>holds</th><th>ep.</th><th>$</th><th>last action</th></tr></thead>
         <tbody id="agents"></tbody></table>
     </section>
@@ -204,6 +226,19 @@
   <div class="body" id="dlgBody"></div>
 </dialog>
 
+<dialog id="agentDlg" aria-labelledby="agentTitle">
+  <header><h1 id="agentTitle">Agent details</h1><button id="agentFilterBtn">Filter activity</button>
+    <button onclick="document.getElementById('agentDlg').close()">Close</button></header>
+  <div class="body">
+    <dl id="agentOverview"></dl>
+    <div id="agentProfile" aria-live="polite"></div>
+    <h2>Shared memory</h2>
+    <p class="muted">All shared board notes, plus messages sent by or addressed to this agent and broadcasts.
+      These are ledger records, not a snapshot of the agent’s current context.</p>
+    <div id="agentMemory"></div>
+  </div>
+</dialog>
+
 <script>
 "use strict";
 const COORD_TOOLS = new Set(["claim_task", "release_task", "renew_task", "create_task", "commit_artifact",
@@ -215,7 +250,7 @@ const NOTE_COLOR = { FAIL: "--bad", DISSENT: "--bad", REVIEW: "--ok", CLAIM: "--
 const S = { ids: { notes: 0, messages: 0, events: 0 }, roster: null, peers: [], fam: {}, tasks: [], taskMap: {},
   spend: {}, agents: {}, counts: { notes: 0, msgs: 0, tools: 0 }, startedAt: null, ended: null, first: true,
   filters: Object.fromEntries(CATS.map(c => [c[0], c[2]])), agentFilter: null, feedCount: 0, pos: {},
-  ledger: [], ltab: "all" };
+  ledger: [], ltab: "all", selectedAgent: null, agentProfile: null, profileRequest: 0 };
 const $ = id => document.getElementById(id);
 const NS = "http://www.w3.org/2000/svg";
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -273,7 +308,7 @@ function buildGraph() {
   g.append(hub);
   S.peers.forEach(pid => {
     const [x, y] = S.pos[pid], c = famColor(pid);
-    const p = el("svg:g", { class: "peer", id: "peer-" + pid });
+    const p = el("svg:g", { class: "peer", id: "peer-" + pid, role: "button", tabindex: "0", "aria-label": `Details for ${pid}` });
     const title = el("svg:title"); const spec = S.roster && S.roster.peers.find(q => q.id === pid);
     title.textContent = spec ? `${pid} · ${spec.model} (${spec.family})\nlens: ${spec.lens || "—"}` : pid;
     p.append(title,
@@ -281,7 +316,8 @@ function buildGraph() {
       el("svg:circle", { class: "body", cx: x, cy: y, r: 24, fill: c, "fill-opacity": .14, stroke: c }),
       el("svg:text", { class: "id", x, y: y + 4 }, pid),
       el("svg:text", { class: "sub", x, y: y + 40, id: "sub-" + pid }, ""));
-    p.addEventListener("click", () => toggleAgentFilter(pid));
+    p.addEventListener("click", () => openAgent(pid));
+    p.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAgent(pid); } });
     g.append(p);
   });
   g.append(el("svg:g", { id: "fxLayer" }));
@@ -341,7 +377,12 @@ function buildFilters() {
 }
 function toggleAgentFilter(pid) {
   S.agentFilter = S.agentFilter === pid ? null : pid;
-  $("feedScope").textContent = S.agentFilter ? `only ${S.agentFilter} · click again to clear` : "";
+  const scope = $("feedScope"); scope.textContent = "";
+  if (S.agentFilter) {
+    scope.append(document.createTextNode(`only ${S.agentFilter} · `));
+    const clear = el("button", { type: "button", class: "ledger-btn" }, "Clear filter");
+    clear.onclick = () => toggleAgentFilter(S.agentFilter); scope.append(clear);
+  }
   renderAgents(); applyFilters();
 }
 function visible(node) {
@@ -384,6 +425,10 @@ function ingest(st) {
         break;
       case "episode_failed": if (!ag.off) ag.state = "idle";
         items.push({ ts: e.created_at, cat: "episode", who: [e.actor], kind: "✗ FAILED", color: "--bad", text: e.detail, fx: () => flash(e.actor) }); break;
+      case "claim_refused":
+        S.counts.tools++;
+        items.push({ ts: e.created_at, cat: "coord", who: [e.actor], kind: "claim skipped", color: "--muted",
+          text: e.detail }); break;
       case "tool": case "tool_error": {
         S.counts.tools++; const name = toolName(e.detail), coord = COORD_TOOLS.has(name), err = e.kind === "tool_error";
         ag.last = e.detail;
@@ -479,14 +524,15 @@ function renderAgents() {
   for (const pid of S.peers) {
     const a = S.agents[pid]; if (!a) continue;
     const held = S.tasks.filter(t => t.owner === pid && t.status === "claimed").map(t => t.id).join(", ");
-    const tr = el("tr", { class: S.agentFilter === pid ? "sel" : "" });
+    const tr = el("tr", { class: S.agentFilter === pid ? "sel" : "", tabindex: "0", "aria-label": `Details for ${pid}` });
     const id = el("td"); const c = el("span", { class: "chip" }, pid); c.style.background = famColor(pid); id.append(c);
     const cls = a.off ? "off" : a.state;
     tr.append(id, (() => { const td = el("td"); td.append(el("span", { class: "state " + cls }, a.state)); return td; })(),
       el("td", { class: "mono" }, held || "—"), el("td", { class: "mono" }, String(a.episodes)),
       el("td", { class: "mono" }, (S.spend[pid] ? S.spend[pid].usd : 0).toFixed(3)),
       el("td", { class: "last", title: a.last }, a.last.slice(0, 70)));
-    tr.onclick = () => toggleAgentFilter(pid);
+    tr.onclick = () => openAgent(pid);
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openAgent(pid); } };
     tb.append(tr);
     const node = $("peer-" + pid);
     if (node) {
@@ -495,6 +541,113 @@ function renderAgents() {
       $("sub-" + pid).textContent = held || (a.off ? a.state : "");
     }
   }
+}
+
+/* ---------- agent details ---------- */
+async function openAgent(pid) {
+  S.selectedAgent = pid; S.agentProfile = null;
+  $("agentTitle").textContent = `${pid} · agent details`;
+  $("agentProfile").textContent = "Loading agent configuration…";
+  renderAgentLive();
+  if (!$("agentDlg").open) $("agentDlg").showModal();
+  await loadAgentProfile(pid);
+}
+async function loadAgentProfile(pid) {
+  const request = ++S.profileRequest;
+  try {
+    const response = await fetch(`/api/agent?id=${encodeURIComponent(pid)}`);
+    if (!response.ok && response.status !== 404) throw new Error("Profile unavailable");
+    const profile = response.ok ? await response.json() : { id: pid, recorded: false };
+    if (request !== S.profileRequest || S.selectedAgent !== pid || !$("agentDlg").open) return;
+    S.agentProfile = profile;
+    renderAgentProfile(profile); renderAgentLive();
+  } catch (e) {
+    if (request !== S.profileRequest || S.selectedAgent !== pid || !$("agentDlg").open) return;
+    const target = $("agentProfile"); target.textContent = "Could not load agent details. ";
+    const retry = el("button", { type: "button" }, "Retry");
+    retry.onclick = () => loadAgentProfile(pid); target.append(retry);
+  }
+}
+function renderAgentProfile(p) {
+  const target = $("agentProfile"); target.textContent = "";
+  const block = (title, content, open = false) => {
+    const d = el("details"); d.open = open;
+    d.append(el("summary", {}, title), content); target.append(d); return d;
+  };
+  const missing = "Not recorded for this run.";
+  block("System prompt", el("pre", { class: "mono" }, p.effective_system_prompt ?? p.system_prompt ?? missing), true);
+  if (p.recorded) {
+    target.append(el("p", { class: "muted" }, p.effective_system_prompt == null
+      ? "Configured protocol shown. The effective prompt and complete tool list are captured at the first model call. Reopen this dialog to refresh."
+      : "Effective system prompt and available tools captured at the first model call; later context is not recorded."));
+    if (p.effective_system_prompt != null) block("Configured protocol", el("pre", { class: "mono" }, p.system_prompt));
+  }
+  const tools = el("div");
+  if (p.tools) {
+    tools.append(el("p", { class: "muted" }, `Source: ${p.tools_source}.`));
+    for (const t of p.tools) {
+      const d = el("details"); d.append(el("summary", {}, t.name), el("p", {}, t.description || ""),
+        el("pre", { class: "mono" }, JSON.stringify(t.parameters || {}, null, 2))); tools.append(d);
+    }
+  } else tools.append(el("p", {}, missing));
+  block(`Tools${p.tools ? ` (${p.tools.length})` : ""}`, tools);
+  block("Skills", el("p", {}, p.skills ? (p.skills.length ? p.skills.join(", ") : "None configured.") : missing));
+  block("Memory and data access", el("p", {}, p.memory
+    ? `${p.memory.description} Private conversation state: ${p.memory.private_state_recorded ? "recorded" : "not recorded"}. ` +
+      (p.data_access ? `Data access: ${p.data_access.path} (${p.data_access.mode}).` : "No data directory configured.")
+    : missing));
+}
+function renderAgentLive() {
+  const pid = S.selectedAgent; if (!pid) return;
+  const p = S.agentProfile || (S.roster && S.roster.peers.find(p => p.id === pid)) || {};
+  const a = S.agents[pid] || {}, spend = S.spend[pid] || {};
+  const overview = $("agentOverview"); overview.textContent = "";
+  const tasks = S.tasks.filter(t => t.owner === pid).map(t => `${t.id} (${t.status})`).join(", ");
+  for (const [label, value] of [["Model", p.model_id || p.model], ["Provider / family", [p.provider, p.family].filter(Boolean).join(" / ")],
+    ["Lens", p.lens], ["Status", a.state], ["Tasks", tasks || "None"], ["Episodes", a.episodes ?? 0],
+    ["Spend / budget", `$${(spend.usd || 0).toFixed(3)} / ${p.peer_usd != null ? "$" + p.peer_usd : "Not recorded"}`],
+    ["Tokens (input / output)", `${spend.input_tokens || 0} / ${spend.output_tokens || 0}`],
+    ["Prompt token limit", p.max_prompt_tokens ?? (p.recorded ? "Model default" : "Not recorded")]]) {
+    overview.append(el("dt", {}, label), el("dd", {}, value === "" || value == null ? "—" : value));
+  }
+  const filter = $("agentFilterBtn"); filter.textContent = S.agentFilter === pid ? "Clear activity filter" : "Filter activity";
+  filter.onclick = () => { toggleAgentFilter(pid); $("agentDlg").close(); };
+  const memory = $("agentMemory"), version = `${pid}:${S.ledger.length}`;
+  if (memory.dataset.version === version) return;
+  const prior = memory.dataset.agent === pid ? [...memory.children].map(d => ({ open: d.open, scroll: d.querySelector("pre").scrollTop })) : [];
+  memory.dataset.version = version; memory.dataset.agent = pid; memory.textContent = "";
+  const notes = S.ledger.filter(r => r.kind === "note");
+  const messages = S.ledger.filter(r => r.kind === "msg" && (r.who === pid || r.to === pid || !r.to));
+  for (const [label, rows] of [["Shared board notes", notes], ["Messages", messages]]) {
+    const d = el("details"); d.open = true;
+    d.append(el("summary", {}, `${label} (${rows.length})`));
+    const recent = rows.slice(-100).reverse();
+    d.append(el("pre", { class: "mono" }, recent.length ? recent.map(r => r.kind === "note"
+      ? `#${r.id} ${r.who} · ${r.type}${r.old ? " · superseded" : ""}\n${r.text}${r.detail ? "\n" + r.detail : ""}`
+      : `m${r.id} ${r.who} → ${r.to || "all"}${r.urgent ? " · urgent" : ""}\n${r.text}`).join("\n\n") : "None recorded."));
+    if (rows.length > recent.length) d.append(el("p", { class: "muted" }, "Showing the latest 100. Open the shared ledger for all records."));
+    memory.append(d);
+  }
+  [...memory.children].forEach((d, i) => { if (prior[i]) { d.open = prior[i].open; d.querySelector("pre").scrollTop = prior[i].scroll; } });
+}
+function renderResult(st) {
+  const sec = $("result");
+  const finals = st.final || [];
+  const show = !!(st.ended && st.ended.status === "done" && ((st.brief && st.brief.length) || finals.length));
+  sec.hidden = !show;
+  if (!show) return;
+  const body = $("resultBody"); body.textContent = "";
+  const split = el("div", { class: "split" });
+  const problem = el("div");
+  problem.append(el("h3", {}, "Problem"), el("pre", { class: "mono" }, st.brief || "This ledger has no stored brief."));
+  const out = el("div");
+  out.append(el("h3", {}, "Final output"));
+  if (!finals.length) out.append(el("p", { class: "empty" }, "No final artifact committed."));
+  for (const a of finals) {
+    out.append(el("p", { class: "who mono" }, `${a.id} · ${a.title} · ${a.author}`), el("pre", { class: "mono" }, a.content));
+  }
+  split.append(problem, out);
+  body.append(split);
 }
 function renderHeader(st) {
   const status = st.waiting ? "waiting" : (st.ended ? st.ended.status : "running");
@@ -577,10 +730,12 @@ async function poll() {
       ingest(st);
       renderTasks(st.tasks);
       renderAgents();
+      if ($("agentDlg").open) renderAgentLive();
       $("ledgerCount").textContent = S.ledger.length;
       if ($("ledgerDlg").open && (st.notes.length || st.messages.length)) { syncLedgerOptions(); renderLedger(); }
       more = st.events.length >= 2000 || st.notes.length >= 2000 || st.messages.length >= 2000;
       if (!more) S.first = false;
+      renderResult(st);
     }
     S.ended = st.ended;
     renderHeader(st);

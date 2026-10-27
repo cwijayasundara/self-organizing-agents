@@ -185,6 +185,28 @@ def test_cli_wires_non_empty_validator_and_prints_exhausted(tmp_path, monkeypatc
                                                 content="y" * 300, created_at=0.0))
 
 
+def test_done_run_prints_problem_and_final_artifact(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(api, "build_model", lambda spec: ScriptedChatModel())
+
+    async def fake_run(self):
+        self.ledger.tasks.claim("summary", "A01", "fa")
+        self.ledger.artifacts.commit("summary", "A01", "The memo.")
+        return RunResult("done", 0, 1, DoneStatus(True, []), {"A01": 1}, [])
+
+    monkeypatch.setattr(api.SwarmRunner, "run", fake_run)
+    assert cli.main(write(tmp_path) + ["-q"]) == 0
+    cap = capsys.readouterr()
+    assert json.loads(cap.out)["status"] == "done"
+    assert "======== problem ========" in cap.err
+    assert "Brief text." in cap.err and "summary@v1" in cap.err and "The memo." in cap.err
+
+
+def test_unfinished_run_does_not_print_the_final_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(api, "build_model", lambda spec: ScriptedChatModel())
+    cli.main(write(tmp_path))
+    assert "======== problem ========" not in capsys.readouterr().err
+
+
 def test_glm_deepseek_rosters_load():
     for path, n in (("roster.glm-deepseek.yaml", 10), ("examples/toy_dossier/roster.glm-deepseek.yaml", 3)):
         r = load_roster(path)
